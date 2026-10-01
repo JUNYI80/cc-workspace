@@ -1,0 +1,24 @@
+{
+  "name": "block-siege",
+  "version": "1.0.0",
+  "description": "积木攻城：3D 回合制搭建对战游戏原型",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build && node scripts/to-artifact.mjs",
+    "typecheck": "tsc",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "dependencies": {
+    "cannon-es": "^0.20.0",
+    "three": "^0.186.1"
+  },
+  "devDependencies": {
+    "@types/three": "^0.186.0",
+    "playwright-core": "^1.63.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.2",
+    "vite-plugin-singlefile": "^2.3.3"
+  },
+  "private": true,
+  "type": "module"
+}

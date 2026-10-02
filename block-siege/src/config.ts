@@ -91,7 +91,9 @@ export const WEAPONS: Record<WeaponKind, WeaponDef> = {
 };
 
 export const CORE_HP = 100;
-export const CORE_MASS = 2;
+/** Share of blast damage the core takes, so one clean hit can't end the match. */
+export const CORE_BLAST_TAKEN = 0.85;
+export const CORE_MASS = 6;
 
 export type Stock = Record<Mat, number>;
 

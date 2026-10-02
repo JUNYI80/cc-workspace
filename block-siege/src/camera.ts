@@ -73,8 +73,10 @@ export class CameraRig {
     this.camera.lookAt(this.target);
   }
 
+  private readonly calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
   shake(amount: number) {
-    this.trauma = Math.min(1, this.trauma + amount);
+    this.trauma = Math.min(1, this.trauma + amount * (this.calm ? 0.25 : 1));
   }
 
   resize(w: number, h: number) {

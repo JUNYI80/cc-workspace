@@ -46,10 +46,9 @@ export function buildAiFort(pool: Stock, rng: () => number): FortPlan {
       if (plan.col(i, j).length < h + 1) put(h === 2 ? 'wood' : 'stone', i, j);
     }
   }
-  // wooden front wall, two high, leaving the cannon column clear
+  // wooden front wall, two high; the cannon sits on two blocks so it fires over it
   for (let h = 0; h < 2; h++)
     for (let j = 0; j < GRID; j++) {
-      if (j === canJ) continue;
       if (plan.col(GRID - 1, j).length <= h) put('wood', GRID - 1, j);
     }
   // spend what is left on random thickening near the core

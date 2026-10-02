@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { Sfx } from './audio';
 import { type Aim, aimDirection, launchOrigin, speedFor } from './ballistics';
 import {
+  CORE_BLAST_TAKEN,
   CORE_HP,
   CORE_MASS,
   GRID,
@@ -296,10 +297,13 @@ export class Arena {
   }
 
   private impactDamage(e: Entity, other: Owner, v: number) {
-    if (!e.alive || v < 4) return;
+    const core = e.kind === 'core';
+    const threshold = core ? 5 : 4;
+    if (!e.alive || v < threshold) return;
     let factor = 1;
     if (other.type === 'entity') factor = THREE.MathUtils.clamp(other.e.body.mass / e.body.mass, 0.5, 2);
-    this.damage(e, (v - 4) * 6 * factor);
+    // the core is sturdier against knocks than against direct blasts
+    this.damage(e, (v - threshold) * 5 * factor * (core ? 0.4 : 1));
   }
 
   explode(pos: THREE.Vector3, radius: number, dmg: number, impulse: number) {
@@ -317,13 +321,14 @@ export class Arena {
       if (d > radius) continue;
       const f = 1 - d / radius;
       let amount = dmg * f;
-      if ((e.kind === 'core' || isWeapon(e.kind)) && this.occluded(from, e)) amount *= 0.35;
+      if ((e.kind === 'core' || isWeapon(e.kind)) && this.occluded(from, e)) amount *= 0.45;
+      if (e.kind === 'core') amount *= CORE_BLAST_TAKEN;
       const dir = new CANNON.Vec3(dx, dy, dz);
       if (dist < 1e-3) dir.set(0, 1, 0);
       dir.normalize();
       dir.y += 0.35;
       dir.normalize();
-      const j = impulse * f * (0.7 + Math.random() * 0.5);
+      const j = impulse * f * (0.7 + Math.random() * 0.5) * (e.kind === 'core' ? 0.5 : 1);
       e.body.wakeUp();
       e.body.applyImpulse(dir.scale(j), new CANNON.Vec3((Math.random() - 0.5) * 0.5, (Math.random() - 0.5) * 0.5, (Math.random() - 0.5) * 0.5));
       this.damage(e, amount);

@@ -1,0 +1,9 @@
+# downloaded prices, run journal, generated reports
+data/
+state/
+reports/
+.env
+__pycache__/
+*.egg-info/
+.venv/
+.pytest_cache/

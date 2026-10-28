@@ -27,6 +27,7 @@ class StrategyParams:
     vol_window: int = 63
     target_vol: float | None = 0.12  # annualised; None disables vol targeting
     max_weight: float = 0.5
+    weighting: str = "inverse_vol"  # "inverse_vol" or "equal" (each slot 1/top_n)
 
     @property
     def warmup(self) -> int:
@@ -111,6 +112,8 @@ def validate(cfg: Config) -> Config:
         raise ValueError("top_n must be between 1 and the number of risk assets")
     if not 0 < s.max_weight <= 1:
         raise ValueError("max_weight must be in (0, 1]")
+    if s.weighting not in ("inverse_vol", "equal"):
+        raise ValueError("weighting must be 'inverse_vol' or 'equal'")
     if s.target_vol is not None and s.target_vol <= 0:
         raise ValueError("target_vol must be positive or null")
     e = cfg.execution

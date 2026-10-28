@@ -92,3 +92,9 @@ def test_month_end_dates():
     idx = pd.bdate_range("2024-01-01", "2024-03-15")
     me = month_end_dates(idx)
     assert list(me.strftime("%Y-%m-%d")) == ["2024-01-31", "2024-02-29", "2024-03-15"]
+
+
+def test_equal_weighting_gives_each_slot_the_same_share(params):
+    p = replace(params, weighting="equal")
+    w = compute_signal(trend_prices(), RISK, "CASH", p).weights
+    assert w["UP"] == w["UP2"] == pytest.approx(0.5)

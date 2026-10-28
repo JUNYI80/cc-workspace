@@ -5,7 +5,8 @@ At each month end:
   2. An asset is eligible only if it trades above its 200-day moving average
      AND its score beats the cash asset's score (absolute momentum).
   3. Hold the `top_n` highest-scoring eligible assets. Each holds one of
-     `top_n` slots, split by inverse volatility; empty slots go to cash.
+     `top_n` slots, split by inverse volatility (or equally); empty slots
+     go to cash.
   4. Cap each asset at `max_weight` and scale the risk book down if its
      expected volatility exceeds `target_vol`. Whatever is left goes to cash.
 """
@@ -55,8 +56,11 @@ def compute_signal(hist: pd.DataFrame, risk: list[str], cash: str, p: StrategyPa
     chosen = score[eligible].nlargest(p.top_n).index
     expected_vol = 0.0
     if len(chosen):
-        inv_vol = 1.0 / vol[chosen]
-        w = inv_vol / inv_vol.sum() * len(chosen) / p.top_n
+        if p.weighting == "equal":
+            w = pd.Series(1.0 / p.top_n, index=chosen)
+        else:
+            inv_vol = 1.0 / vol[chosen]
+            w = inv_vol / inv_vol.sum() * len(chosen) / p.top_n
         w = w.clip(upper=p.max_weight)
         cov = daily[chosen].cov() * TRADING_DAYS
         expected_vol = float(np.sqrt(w @ cov @ w))

@@ -97,5 +97,5 @@ def test_download_parses_yfinance_frame(monkeypatch, tmp_path):
     out = data.load_prices(["B.L", "A.L"], "2024-01-01", cache_dir=tmp_path)
     assert list(out.columns) == ["B.L", "A.L"] and out.index.tz is None
     assert out["A.L"].iloc[-1] == 1.2
-    data.load_prices(["A.L"], "2024-01-01", cache_dir=tmp_path)  # served from cache
+    data.load_prices(["A.L", "B.L"], "2024-01-01", cache_dir=tmp_path)  # same set: from cache
     assert len(calls) == 1

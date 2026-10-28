@@ -27,6 +27,7 @@ t212-quant/
 ├── src/t212quant/
 │   ├── strategy.py        # 信号：动量 + 趋势过滤 + 倒数波动率 + 波动率目标
 │   ├── backtest.py        # 回测引擎（月末决策，次日收盘成交，含交易成本）
+│   ├── research.py        # 个股研究：t212q research TSLA NVDA
 │   ├── metrics.py         # 年化收益、波动、夏普、最大回撤等
 │   ├── data.py            # Yahoo Finance 行情下载、缓存、清洗
 │   ├── broker.py          # Trading 212 API 客户端（含限速处理）
@@ -39,19 +40,53 @@ t212-quant/
 
 运行后会生成 `data/`（行情缓存）、`reports/`（回测图）、`state/journal.jsonl`（下单记录），这些都在 `.gitignore` 里。
 
-## 安装
+## 从零开始运行
 
-需要 Python 3.10+。
+**1. 安装 Python**：到 [python.org](https://www.python.org/downloads/) 下载 3.12 或更新版本。Windows 安装时一定要勾选 **Add python.exe to PATH**。
+
+**2. 下载代码**：在 GitHub 仓库页面点绿色的 **Code** 按钮 → **Download ZIP**，解压。（注意先切换到代码所在的分支。）
+
+**3. 打开终端，进入项目文件夹**：Mac 打开「终端」，Windows 打开「PowerShell」，输入 `cd `（后面带一个空格），再把解压出来的 `projects/t212-quant` 文件夹拖进窗口，按回车。
+
+**4. 安装依赖**（只需要做一次）：
 
 ```bash
-cd projects/t212-quant
-python -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -e ".[dev]"
-pytest                             # 应该全部通过
+python -m pip install -e ".[plot]"
 ```
 
+Mac 上把 `python` 换成 `python3`。如果报错 `externally-managed-environment`，先运行 `python3 -m venv .venv && source .venv/bin/activate`，再重新安装。
+
+**5. 运行**，比如研究特斯拉和英伟达：
+
+```bash
+python -m t212quant research TSLA NVDA
+```
+
+（开发者：`pip install -e ".[dev]"` 后运行 `pytest`，应全部通过。）
+
+## 研究个股（比如特斯拉、英伟达）
+
+```bash
+python -m t212quant research TSLA NVDA      # 两只一起
+python -m t212quant research NVDA           # 只看一只
+```
+
+可以换成任何美股代码（AAPL、MSFT、AMZN……）。规则和 ETF 策略一样，只是每只股票是一个"开关"：
+
+- 每只股票分到相等的一份钱（两只就各一半）；
+- 每月底检查：股价在 200 日均线之上、且近 3/6/12 个月平均涨幅跑赢现金 → 持有；否则这一份换成现金（回测里用美国短期国债 ETF BIL 代表现金）。
+
+输出三部分：
+
+1. **回测对比**：趋势策略 vs 一直持有这些股票 vs 标普 500，看 1 万美元变成多少、年化收益、最大回撤（期间最多亏过多少）、平均仓位。
+2. **当前信号**：每只股票现在该持有还是空仓，以及原因。
+3. **图表**：保存在 `reports/research_TSLA_NVDA.png`。
+
+回测按美元计算，每笔交易成本按 0.25% 估算（价差约 0.10% + Trading 212 美股换汇费 0.15%）。这个命令只做研究，不会连接你的账户，也不会下单。
+
 ## 使用步骤
+
+下面的 `t212q` 也可以写成 `python -m t212quant`。
 
 **第 1 步：真实数据回测**（会从 Yahoo Finance 下载约 15 年的数据）
 

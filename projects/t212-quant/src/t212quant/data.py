@@ -1,6 +1,7 @@
 """Price data: download from Yahoo Finance, cache to disk, clean, or synthesise."""
 from __future__ import annotations
 
+import hashlib
 import logging
 import time
 from pathlib import Path
@@ -39,7 +40,8 @@ def load_prices(
 ) -> pd.DataFrame:
     """Load prices from the CSV cache, downloading when missing, stale or refresh=True."""
     cache_dir.mkdir(parents=True, exist_ok=True)
-    path = cache_dir / f"prices_{start}.csv"
+    key = hashlib.md5(",".join(sorted(symbols)).encode()).hexdigest()[:8]
+    path = cache_dir / f"prices_{start}_{key}.csv"
     fresh = path.exists() and time.time() - path.stat().st_mtime < CACHE_MAX_AGE_S
     if fresh and not refresh:
         cached = pd.read_csv(path, index_col=0, parse_dates=True)
@@ -48,6 +50,12 @@ def load_prices(
     prices = download_prices(symbols, start)
     prices.to_csv(path)
     return clean_prices(prices)
+
+
+def completed_closes(prices: pd.DataFrame) -> pd.DataFrame:
+    """Drop today's still-moving intraday bar so signals use finished closes only."""
+    today = pd.Timestamp.now(tz="UTC").tz_localize(None).normalize()
+    return prices[prices.index < today] if prices.index[-1] >= today else prices
 
 
 def clean_prices(prices: pd.DataFrame, max_gap: int = 5) -> pd.DataFrame:

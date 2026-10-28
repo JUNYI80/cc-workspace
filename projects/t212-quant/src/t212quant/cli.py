@@ -6,13 +6,13 @@ import json
 import logging
 import os
 import sys
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from . import backtest, data
+from . import backtest, data, research
 from .broker import Trading212Client
 from .config import Config, load_config
 from .rebalance import (
@@ -54,6 +54,23 @@ def cmd_backtest(cfg: Config, args) -> int:
     return 0
 
 
+def cmd_research(_cfg: Config, args) -> int:
+    cfg = research.build_config(args.symbols)
+    study = research.run(cfg, _prices(cfg, args, cfg.all_symbols))
+    print(research.format_study(study))
+    from .plot import plot_results
+
+    stocks = " + ".join(cfg.risk_symbols)
+    path = Path(args.plot or PROJECT_DIR / "reports" / f"research_{'_'.join(cfg.risk_symbols)}.png")
+    try:
+        plot_results(study.results, path, title=f"Trend rule on {stocks}")
+    except ImportError:
+        print('\n(Install matplotlib for a chart: pip install -e ".[plot]")')
+        return 0
+    print(f"\n图表：{path}")
+    return 0
+
+
 def cmd_sweep(cfg: Config, args) -> int:
     prices = _prices(cfg, args, cfg.all_symbols)
     df = backtest.sweep(cfg, prices)
@@ -66,14 +83,8 @@ def cmd_sweep(cfg: Config, args) -> int:
     return 0
 
 
-def _completed_closes(prices: pd.DataFrame) -> pd.DataFrame:
-    """Drop today's still-moving intraday bar so signals use finished closes only."""
-    today = pd.Timestamp(datetime.now(timezone.utc).date())
-    return prices[prices.index < today] if prices.index[-1] >= today else prices
-
-
 def _latest_signal(cfg: Config, args):
-    prices = _completed_closes(_prices(cfg, args, cfg.strategy_symbols, refresh=True))
+    prices = data.completed_closes(_prices(cfg, args, cfg.strategy_symbols, refresh=True))
     sig = compute_signal(prices, cfg.risk_symbols, cfg.cash_symbol, cfg.strategy)
     return prices, sig
 
@@ -213,6 +224,10 @@ def main(argv: list[str] | None = None) -> int:
     data_opts(sp)
     sp.add_argument("--plot", nargs="?", const=str(PROJECT_DIR / "reports" / "backtest.png"),
                     help="save an equity/drawdown chart (PNG)")
+    sp = sub.add_parser("research", help="study the trend rule on stocks, e.g. research TSLA NVDA")
+    sp.add_argument("symbols", nargs="+", help="Yahoo Finance tickers, e.g. TSLA NVDA AAPL")
+    sp.add_argument("--plot", help="where to save the chart (PNG)")
+    data_opts(sp)
     data_opts(sub.add_parser("sweep", help="robustness check over a parameter grid"))
     data_opts(sub.add_parser("signal", help="today's target weights"))
 
@@ -232,7 +247,8 @@ def main(argv: list[str] | None = None) -> int:
                         format="%(levelname)s %(name)s: %(message)s")
     cfg = load_config(args.config)
     handler = {
-        "backtest": cmd_backtest, "sweep": cmd_sweep, "signal": cmd_signal,
+        "backtest": cmd_backtest, "research": cmd_research, "sweep": cmd_sweep,
+        "signal": cmd_signal,
         "resolve": cmd_resolve, "account": cmd_account, "rebalance": cmd_rebalance,
     }[args.cmd]
     return handler(cfg, args)

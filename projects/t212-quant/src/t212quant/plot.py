@@ -14,7 +14,8 @@ TEXT_2 = "#52514e"
 GRID = "#e4e3df"
 
 
-def plot_results(results: dict[str, BacktestResult], path: Path) -> Path:
+def plot_results(results: dict[str, BacktestResult], path: Path,
+                 title: str = "Strategy vs benchmarks") -> Path:
     import matplotlib
 
     matplotlib.use("Agg")
@@ -49,7 +50,7 @@ def plot_results(results: dict[str, BacktestResult], path: Path) -> Path:
     ax1.yaxis.set_major_formatter(fmt)
     ax1.yaxis.set_minor_formatter(fmt)
     ax1.set_ylabel("Growth of 1 (log scale)", color=TEXT_2, fontsize=10)
-    ax1.set_title("Strategy vs benchmarks", loc="left", color=TEXT, fontsize=13)
+    ax1.set_title(title, loc="left", color=TEXT, fontsize=13)
     ax1.legend(frameon=False, fontsize=9, labelcolor=TEXT, loc="upper left")
     ax2.set_ylabel("Drawdown (%)", color=TEXT_2, fontsize=10)
     fig.tight_layout()

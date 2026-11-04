@@ -4,31 +4,27 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import sys
-from datetime import date, datetime, time
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from . import backtest, data, research
+from . import backtest, data, rebalance, research
 from .broker import Trading212Client
 from .config import Config, load_config
-from .rebalance import (
-    DEFAULT_JOURNAL,
-    build_plan,
-    execute,
-    prices_agree,
-    resolve_instruments,
-    to_account_currency,
-)
+from .rebalance import DEFAULT_JOURNAL, execute, resolve_instruments
 from .strategy import compute_signal
 
 PROJECT_DIR = Path(__file__).resolve().parents[2]
-MAX_DATA_AGE_DAYS = 5
-LONDON = ZoneInfo("Europe/London")
-TRADING_WINDOW = (time(8, 15), time(16, 15))  # inside LSE hours, away from the auctions
+BLOCKER_MESSAGES = {
+    rebalance.LIVE_NOT_ALLOWED:
+        "Refusing to trade real money: set T212_ALLOW_LIVE=yes to allow live orders.",
+    rebalance.MARKET_CLOSED:
+        "LSE is closed (live orders only Mon-Fri 08:15-16:15 London time); "
+        "market orders would queue and fill at the open.",
+    rebalance.ALREADY_TRADED:
+        "Already traded this month (see state/journal.jsonl). Use --force to trade again.",
+}
 
 SYNTHETIC_WARNING = (
     "*** SYNTHETIC DATA: random prices for testing the code. "
@@ -127,65 +123,20 @@ def cmd_account(cfg: Config, args) -> int:
     return 0
 
 
-def _already_traded_this_month(env: str, journal: Path) -> bool:
-    if not journal.exists():
-        return False
-    month = date.today().strftime("%Y-%m")
-    for line in journal.read_text().splitlines():
-        entry = json.loads(line)
-        placed = any("response" in r for r in entry["results"])
-        if entry["env"] == env and entry["time"][:7] == month and placed:
-            return True
-    return False
-
-
-def _in_trading_window(now: datetime | None = None) -> bool:
-    now = now or datetime.now(LONDON)
-    return now.weekday() < 5 and TRADING_WINDOW[0] <= now.time() <= TRADING_WINDOW[1]
-
-
 def cmd_rebalance(cfg: Config, args) -> int:
-    ex = cfg.execution
-    if args.execute and args.env == "live" and os.getenv("T212_ALLOW_LIVE") != "yes":
-        print("Refusing to trade real money: set T212_ALLOW_LIVE=yes to allow live orders.")
-        return 2
-    if args.execute and args.env == "live" and not _in_trading_window():
-        print("LSE is closed (live orders only Mon-Fri 08:15-16:15 London time); "
-              "market orders would queue and fill at the open.")
-        return 2
-    if args.execute and not args.force and _already_traded_this_month(args.env, DEFAULT_JOURNAL):
-        print("Already traded this month (see state/journal.jsonl). Use --force to trade again.")
-        return 2
+    if args.execute:
+        blockers = rebalance.execution_blockers(args.env, DEFAULT_JOURNAL, force=args.force)
+        if blockers:
+            print(BLOCKER_MESSAGES[blockers[0]])
+            return 2
 
     prices, sig = _latest_signal(cfg, args)
-    problems = []
-    age = (pd.Timestamp(date.today()) - prices.index[-1]).days
-    if age > MAX_DATA_AGE_DAYS:
-        problems.append(f"price data is {age} days old")
-    last = prices.iloc[-1]
-    if last.isna().any():
-        print(f"Cannot plan: no recent price for {list(last[last.isna()].index)}")
-        return 1
-
     client = Trading212Client.from_env(args.env)
-    resolved = resolve_instruments(cfg.assets, client.instruments())
-    tickers = {s: i["ticker"] for s, i in resolved.items()}
-    by_ticker = {p["ticker"]: p for p in client.portfolio()}
-    free_cash = float(client.cash()["free"])
-
-    px, holdings = {}, {}
-    for a in cfg.assets:
-        px[a.symbol] = to_account_currency(float(last[a.symbol]), a.quote_currency, cfg.account_currency)
-        pos = by_ticker.get(tickers[a.symbol])
-        if pos:
-            # Shares inside a Pie belong to the Pie, not to this bot.
-            holdings[a.symbol] = float(pos["quantity"]) - float(pos.get("pieQuantity") or 0)
-            if not prices_agree(float(last[a.symbol]), float(pos["currentPrice"])):
-                problems.append(f"{a.symbol}: data price {last[a.symbol]:.2f} vs Trading 212 "
-                                f"{pos['currentPrice']:.2f} disagree")
-
-    plan = build_plan(sig.weights, holdings, px, free_cash, tickers, ex)
-    plan.problems += problems
+    try:
+        plan = rebalance.plan_from_account(cfg, client, prices, sig.weights)
+    except ValueError as exc:
+        print(f"Cannot plan: {exc}")
+        return 1
     print(f"[{args.env.upper()}] signal as of close {sig.as_of.date()}\n")
     print(plan.describe(cfg.account_currency))
 
@@ -202,7 +153,7 @@ def cmd_rebalance(cfg: Config, args) -> int:
         if answer.strip().lower() != "yes":
             print("Cancelled.")
             return 1
-    rows = execute(plan, client, ex, journal=DEFAULT_JOURNAL)
+    rows = execute(plan, client, cfg.execution, journal=DEFAULT_JOURNAL)
     failed = [r for r in rows if "error" in r or "abort" in r]
     print(f"\nDone: {len(rows) - len(failed)} ok, {len(failed)} failed/aborted. Journal: {DEFAULT_JOURNAL}")
     for r in failed:

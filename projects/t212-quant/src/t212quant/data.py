@@ -15,8 +15,13 @@ DEFAULT_CACHE = Path(__file__).resolve().parents[2] / "data"
 CACHE_MAX_AGE_S = 12 * 3600
 
 
-def download_prices(symbols: list[str], start: str) -> pd.DataFrame:
-    """Daily dividend-adjusted closes, one column per symbol."""
+def download_prices(symbols: list[str], start: str, allow_missing: bool = False) -> pd.DataFrame:
+    """Daily dividend-adjusted closes, one column per symbol.
+
+    With allow_missing=True, symbols Yahoo has no data for are dropped (with a
+    warning) instead of failing the whole download. Use it for big stock
+    universes, where a few renamed or delisted tickers are normal.
+    """
     import yfinance as yf  # imported lazily so tests run without network deps
 
     raw = yf.download(symbols, start=start, auto_adjust=True, progress=False, group_by="column")
@@ -26,10 +31,12 @@ def download_prices(symbols: list[str], start: str) -> pd.DataFrame:
     if not isinstance(raw.columns, pd.MultiIndex):
         close.columns = symbols
     missing = [s for s in symbols if s not in close.columns or close[s].dropna().empty]
-    if missing:
+    if missing and not allow_missing:
         raise RuntimeError(f"No price data for {missing}; check the symbols")
+    if missing:
+        log.warning("No price data for %d symbol(s), skipped: %s", len(missing), missing)
     close.index = pd.to_datetime(close.index).tz_localize(None)
-    return close[symbols].sort_index()
+    return close[[s for s in symbols if s not in missing]].sort_index()
 
 
 def load_prices(
@@ -37,6 +44,7 @@ def load_prices(
     start: str,
     cache_dir: Path = DEFAULT_CACHE,
     refresh: bool = False,
+    allow_missing: bool = False,
 ) -> pd.DataFrame:
     """Load prices from the CSV cache, downloading when missing, stale or refresh=True."""
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -45,9 +53,10 @@ def load_prices(
     fresh = path.exists() and time.time() - path.stat().st_mtime < CACHE_MAX_AGE_S
     if fresh and not refresh:
         cached = pd.read_csv(path, index_col=0, parse_dates=True)
-        if set(symbols) <= set(cached.columns):
-            return clean_prices(cached[symbols])
-    prices = download_prices(symbols, start)
+        have = [s for s in symbols if s in cached.columns]
+        if len(have) == len(symbols) or (allow_missing and have):
+            return clean_prices(cached[have])
+    prices = download_prices(symbols, start, allow_missing=allow_missing)
     prices.to_csv(path)
     return clean_prices(prices)
 

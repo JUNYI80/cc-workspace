@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 from pandas.tseries.offsets import BDay
 
-from t212quant import cli
+from t212quant import cli, rebalance
 from t212quant.config import load_config
 from t212quant.data import synthetic_prices
 
@@ -78,15 +78,16 @@ def test_live_requires_explicit_opt_in(setup, capsys):
 
 def test_live_refused_outside_market_hours(setup, monkeypatch, capsys):
     monkeypatch.setenv("T212_ALLOW_LIVE", "yes")
-    monkeypatch.setattr(cli, "_in_trading_window", lambda: False)
+    monkeypatch.setattr(rebalance, "in_trading_window", lambda: False)
     assert cli.main(["rebalance", "--env", "live", "--execute", "--yes"]) == 2
     assert setup.orders == []
 
 
 def test_trading_window():
-    assert cli._in_trading_window(datetime(2026, 10, 26, 10, 0, tzinfo=cli.LONDON))  # Monday
-    assert not cli._in_trading_window(datetime(2026, 10, 25, 10, 0, tzinfo=cli.LONDON))  # Sunday
-    assert not cli._in_trading_window(datetime(2026, 10, 26, 7, 0, tzinfo=cli.LONDON))
+    london = rebalance.LONDON
+    assert rebalance.in_trading_window(datetime(2026, 10, 26, 10, 0, tzinfo=london))  # Monday
+    assert not rebalance.in_trading_window(datetime(2026, 10, 25, 10, 0, tzinfo=london))  # Sunday
+    assert not rebalance.in_trading_window(datetime(2026, 10, 26, 7, 0, tzinfo=london))
 
 
 def test_price_mismatch_blocks_execution(setup, capsys):

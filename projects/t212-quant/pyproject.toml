@@ -4,21 +4,22 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "t212quant"
-version = "0.1.0"
-description = "Trend-filtered momentum ETF rotation with Trading 212 execution"
+version = "0.2.0"
+description = "Quant stock picks, IPO tracking and ETF rotation for Trading 212"
 requires-python = ">=3.10"
 dependencies = [
     "numpy>=1.24",
-    "pandas>=2.1",
+    "pandas>=2.2",
     "pyyaml>=6",
     "requests>=2.31",
-    "yfinance>=0.2.40",
+    "yfinance>=0.2.54",  # brings curl_cffi, which the Nasdaq IPO calendar needs
     "tzdata; platform_system == \"Windows\"",
 ]
 
 [project.optional-dependencies]
 plot = ["matplotlib>=3.7"]
-dev = ["pytest>=7", "matplotlib>=3.7"]
+app = ["streamlit>=1.40", "altair>=5", "lxml>=4.9", "matplotlib>=3.7"]
+dev = ["pytest>=7", "streamlit>=1.40", "altair>=5", "lxml>=4.9", "matplotlib>=3.7"]
 
 [project.scripts]
 t212q = "t212quant.cli:main"

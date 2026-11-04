@@ -12,7 +12,7 @@
 
 | 项目 | 说明 |
 |---|---|
-| [`projects/t212-quant`](projects/t212-quant/) | 趋势过滤的动量 ETF 轮动策略，含回测和 Trading 212 自动下单 |
+| [`projects/t212-quant`](projects/t212-quant/) | 量化助手：A 类量化选股、B 类新股与 IPO 跟踪、ETF 轮动（可连接 Trading 212）。双击 `start-windows.bat` 或 `start-mac.command` 启动 |
 
 ## 历史文件
 

@@ -4,20 +4,60 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import time
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from datetime import time as dtime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
 from .broker import Trading212Client
-from .config import Asset, ExecutionParams
+from .config import Asset, Config, ExecutionParams
 from .strategy import apply_band
 
 log = logging.getLogger(__name__)
 
 DEFAULT_JOURNAL = Path(__file__).resolve().parents[2] / "state" / "journal.jsonl"
+MAX_DATA_AGE_DAYS = 5
+LONDON = ZoneInfo("Europe/London")
+TRADING_WINDOW = (dtime(8, 15), dtime(16, 15))  # inside LSE hours, away from the auctions
+
+# Reasons execution_blockers() can return.
+LIVE_NOT_ALLOWED = "live_not_allowed"
+MARKET_CLOSED = "market_closed"
+ALREADY_TRADED = "already_traded"
+
+
+def in_trading_window(now: datetime | None = None) -> bool:
+    now = now or datetime.now(LONDON)
+    return now.weekday() < 5 and TRADING_WINDOW[0] <= now.time() <= TRADING_WINDOW[1]
+
+
+def already_traded_this_month(env: str, journal: Path) -> bool:
+    if not journal.exists():
+        return False
+    month = date.today().strftime("%Y-%m")
+    for line in journal.read_text().splitlines():
+        entry = json.loads(line)
+        placed = any("response" in r for r in entry["results"])
+        if entry["env"] == env and entry["time"][:7] == month and placed:
+            return True
+    return False
+
+
+def execution_blockers(env: str, journal: Path, force: bool = False) -> list[str]:
+    """Why orders must not be placed right now; an empty list means go ahead."""
+    out = []
+    if env == "live" and os.getenv("T212_ALLOW_LIVE") != "yes":
+        out.append(LIVE_NOT_ALLOWED)
+    if env == "live" and not in_trading_window():
+        out.append(MARKET_CLOSED)
+    if not force and already_traded_this_month(env, journal):
+        out.append(ALREADY_TRADED)
+    return out
 
 
 def resolve_instruments(assets: tuple[Asset, ...], instruments: list[dict]) -> dict[str, dict]:
@@ -163,6 +203,39 @@ def build_plan(
             )
         orders.append(order)
     return Plan(sleeve, free_cash, current, target, orders, problems)
+
+
+def plan_from_account(cfg: Config, client: Trading212Client, prices: pd.DataFrame,
+                      weights: pd.Series) -> Plan:
+    """Read the live account and plan the orders, flagging stale or inconsistent data."""
+    problems = []
+    age = (pd.Timestamp(date.today()) - prices.index[-1]).days
+    if age > MAX_DATA_AGE_DAYS:
+        problems.append(f"price data is {age} days old")
+    last = prices.iloc[-1]
+    latest = last[cfg.strategy_symbols]
+    if latest.isna().any():
+        raise ValueError(f"no recent price for {list(latest[latest.isna()].index)}")
+
+    resolved = resolve_instruments(cfg.assets, client.instruments())
+    tickers = {s: i["ticker"] for s, i in resolved.items()}
+    by_ticker = {p["ticker"]: p for p in client.portfolio()}
+    free_cash = float(client.cash()["free"])
+
+    px, holdings = {}, {}
+    for a in cfg.assets:
+        px[a.symbol] = to_account_currency(float(last[a.symbol]), a.quote_currency, cfg.account_currency)
+        pos = by_ticker.get(tickers[a.symbol])
+        if pos:
+            # Shares inside a Pie belong to the Pie, not to this bot.
+            holdings[a.symbol] = float(pos["quantity"]) - float(pos.get("pieQuantity") or 0)
+            if not prices_agree(float(last[a.symbol]), float(pos["currentPrice"])):
+                problems.append(f"{a.symbol}: data price {last[a.symbol]:.2f} vs Trading 212 "
+                                f"{pos['currentPrice']:.2f} disagree")
+
+    plan = build_plan(weights, holdings, px, free_cash, tickers, cfg.execution)
+    plan.problems += problems
+    return plan
 
 
 def wait_for_fills(client: Trading212Client, order_ids: list[int], timeout_s: float,

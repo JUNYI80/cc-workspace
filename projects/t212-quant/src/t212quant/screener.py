@@ -28,9 +28,10 @@ from .backtest import BacktestResult
 
 log = logging.getLogger(__name__)
 
-SP500_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-BROWSER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-              "(KHTML, like Gecko) Chrome/130.0 Safari/537.36")
+# Official daily holdings file of the SPDR S&P 500 ETF (SPY), published by State Street.
+SPY_HOLDINGS_URL = ("https://www.ssga.com/us/en/intermediary/library-content/products/fund-data/"
+                    "etfs/us/holdings-daily-us-en-spy.xlsx")
+USER_AGENT = "Mozilla/5.0 (compatible; t212quant personal research app)"
 MARKET = "SPY"
 CASH = "BIL"
 TRADING_DAYS = 252
@@ -85,24 +86,41 @@ class Universe:
         return list(self.table["symbol"])
 
 
-def sp500_universe(timeout: float = 15) -> Universe:
-    """Current S&P 500 members from Wikipedia, or a built-in list of ~100 if that fails."""
+def parse_spy_holdings(xlsx: bytes) -> tuple[pd.DataFrame, str]:
+    """Stocks in State Street's SPY holdings file, and the file's "as of" date text."""
+    raw = pd.read_excel(io.BytesIO(xlsx), header=None)
+    as_of = ""
+    for v in raw.iloc[:6, 1]:
+        if isinstance(v, str) and v.lower().startswith("as of"):
+            as_of = v[5:].strip()
+    first_col = raw.iloc[:, 0].map(lambda v: str(v).strip() if isinstance(v, str) else "")
+    header = raw.index[first_col.eq("Name")][0]
+    table = raw.iloc[header + 1:].copy()
+    table.columns = [str(c).strip() for c in raw.iloc[header]]
+    tickers = table["Ticker"].map(lambda v: v.strip() if isinstance(v, str) else "")
+    stocks = table[tickers.str.fullmatch(r"[A-Z]{1,5}(\.[A-Z])?") &
+                   pd.to_numeric(table["Weight"], errors="coerce").gt(0)]
+    df = pd.DataFrame({
+        "symbol": stocks["Ticker"].str.strip().str.replace(".", "-", regex=False),  # Yahoo uses BRK-B
+        "name": stocks["Name"].astype(str).str.strip().str.title(),
+        "sector": "",
+    }).drop_duplicates("symbol")
+    return df.reset_index(drop=True), as_of
+
+
+def sp500_universe(timeout: float = 30) -> Universe:
+    """Current S&P 500 members from SPY's official holdings, or a built-in list of ~100."""
     try:
-        resp = requests.get(SP500_URL, headers={"User-Agent": BROWSER_UA}, timeout=timeout)
+        resp = requests.get(SPY_HOLDINGS_URL, headers={"User-Agent": USER_AGENT}, timeout=timeout)
         resp.raise_for_status()
-        table = pd.read_html(io.StringIO(resp.text), attrs={"id": "constituents"})[0]
-        df = pd.DataFrame({
-            "symbol": table["Symbol"].astype(str).str.replace(".", "-", regex=False),
-            "name": table["Security"].astype(str),
-            "sector": table["GICS Sector"].map(lambda s: SECTORS_ZH.get(s, s)),
-        })
+        df, as_of = parse_spy_holdings(resp.content)
         if len(df) < 400:
-            raise ValueError(f"only {len(df)} rows parsed")
-        return Universe(df.reset_index(drop=True), "标普 500 成分股")
-    except Exception as exc:  # network, layout change, missing lxml...
-        log.warning("Could not load S&P 500 list (%s); using built-in list", exc)
+            raise ValueError(f"only {len(df)} stocks parsed")
+        return Universe(df, f"标普 500 成分股（State Street SPY 官方持仓，{as_of}）")
+    except Exception as exc:  # network, file layout change...
+        log.warning("Could not load SPY holdings (%s); using built-in list", exc)
         df = pd.DataFrame({"symbol": FALLBACK_UNIVERSE, "name": FALLBACK_UNIVERSE, "sector": ""})
-        return Universe(df, f"内置的 {len(df)} 只美国大盘股（标普 500 名单暂时无法获取）")
+        return Universe(df, f"内置的 {len(df)} 只美国大盘股（官方持仓文件暂时无法获取）")
 
 
 @dataclass

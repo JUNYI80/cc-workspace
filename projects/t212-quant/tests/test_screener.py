@@ -79,21 +79,47 @@ def test_universe_falls_back_when_offline(monkeypatch):
     assert "内置" in u.source and "AAPL" in u.symbols
 
 
-def test_universe_parses_wikipedia_table(monkeypatch):
-    rows = "".join(f"<tr><td>T{i}</td><td>Co {i}</td><td>Energy</td></tr>" for i in range(420))
-    html = ('<table id="constituents"><tr><th>Symbol</th><th>Security</th><th>GICS Sector</th></tr>'
-            f"<tr><td>BRK.B</td><td>Berkshire</td><td>Financials</td></tr>{rows}</table>")
+def spy_holdings_xlsx(n: int = 420) -> bytes:
+    """A file laid out like State Street's real SPY holdings download (checked Nov 2026)."""
+    import io
 
+    rows = [["Fund Name:", "State Street SPDR S&P 500 ETF Trust"] + [None] * 6,
+            ["Ticker Symbol:", "SPY"] + [None] * 6,
+            ["Holdings:", "As of 03-Nov-2026"] + [None] * 6,
+            [None] * 8,
+            ["Name", "Ticker", "Identifier", "SEDOL", "Weight", "Sector", "Shares Held", "Local Currency"],
+            ["NVIDIA CORP", "NVDA", "67066G104", "2379504", 7.66, "-", 298782688, "USD"],
+            ["BERKSHIRE HATHAWAY INC CL B", "BRK.B", "084670702", "2073390", 1.6, "-", 1, "USD"]]
+    rows += [[f"COMPANY {i} INC", f"T{chr(65 + i % 26)}{chr(65 + i // 26 % 26)}", "x", "y", 0.1, "-", 1, "USD"]
+             for i in range(n)]
+    rows += [["US DOLLAR", "CASH_USD", "-", "-", 0.02, "-", 1, "USD"],
+             ["S&P500 EMINI DEC26", "ESZ6", "-", "-", 0.0, "-", 1, "USD"],
+             [None] * 8,
+             ["Past performance is not a guarantee of future results."] + [None] * 7]
+    buf = io.BytesIO()
+    pd.DataFrame(rows).to_excel(buf, header=False, index=False)
+    return buf.getvalue()
+
+
+def test_parse_spy_holdings():
+    df, as_of = screener.parse_spy_holdings(spy_holdings_xlsx())
+    assert as_of == "03-Nov-2026"
+    assert df["symbol"].iloc[:2].tolist() == ["NVDA", "BRK-B"]  # Yahoo uses '-' for share classes
+    assert {"CASH_USD", "ESZ6"}.isdisjoint(df["symbol"])  # cash and futures lines are skipped
+    assert df["name"].iloc[0] == "Nvidia Corp"
+
+
+def test_universe_from_official_holdings(monkeypatch):
     class Resp:
-        text = html
+        content = spy_holdings_xlsx()
 
         def raise_for_status(self):
             pass
 
     monkeypatch.setattr(screener.requests, "get", lambda *a, **k: Resp())
     u = screener.sp500_universe()
-    assert u.symbols[0] == "BRK-B"  # Yahoo uses '-' for share classes
-    assert u.table["sector"].iloc[0] == "金融"
+    assert "State Street" in u.source and "03-Nov-2026" in u.source
+    assert len(u.symbols) >= 400
 
 
 def test_warnings():

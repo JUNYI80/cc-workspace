@@ -4,10 +4,10 @@ on:
   workflow_dispatch:
   push:
     branches: [claude/focused-dirac-o1qp6d]
-    paths: ["tools/**", ".github/workflows/real-data.yml"]
+    paths: ["tools/**", "projects/**", ".github/workflows/real-data.yml"]
 
 jobs:
-  probe:
+  probe-cn:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -15,5 +15,40 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -q requests pandas openpyxl lxml yfinance baostock
+      - run: pip install -q requests pandas xlrd baostock
       - run: python tools/probe_sources.py
+
+  us:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the US product
+        run: pip install -q -e "projects/t212-quant[dev]"
+      - name: Unit tests
+        run: python -m pytest -q projects/t212-quant
+      - name: Real-data end-to-end run
+        run: python tools/smoke_us.py
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Screenshot the app on real data
+        run: |
+          npm install --no-save --silent playwright@1.56.1
+          npx playwright install --with-deps chromium > /dev/null
+          cd projects/t212-quant
+          python -m streamlit run src/t212quant/app.py --server.port 8501 > ../../streamlit-us.log 2>&1 &
+          cd ../..
+          mkdir -p shots-us
+          node tools/shots.js http://localhost:8501 shots-us \
+            '[["", "overview", []], ["stocks", "stocks", ["历史回测", "单只股票分析"]], ["ipo", "ipo", ["IPO 日历", "新股提醒"]], ["etf", "etf", []], ["account", "account", []]]'
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: us-screens
+          path: |
+            shots-us/
+            streamlit-us.log

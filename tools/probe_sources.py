@@ -1,7 +1,6 @@
-"""Probe data sources from a machine with normal internet access (GitHub Actions).
-
-Round 2: China sources, with a hard timeout on every probe.
-"""
+"""Probe China data sources from GitHub Actions (round 3): exact fields and speed."""
+import io
+import json
 import socket
 import sys
 import threading
@@ -10,156 +9,148 @@ import traceback
 
 import requests
 
-socket.setdefaulttimeout(25)
+socket.setdefaulttimeout(30)
 BROWSER = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36"
 PROBES = []
 
 
-def probe(name, limit=90):
+def probe(name, limit=120):
     def wrap(fn):
         PROBES.append((name, limit, fn))
         return fn
     return wrap
 
 
-def show(resp, n=800):
-    print("status", resp.status_code, "type", resp.headers.get("content-type"), "len", len(resp.content))
-    print(resp.text[:n].replace("\n", " "))
+def get(url, tries=3, **kw):
+    for i in range(tries):
+        try:
+            return requests.get(url, timeout=25, **kw)
+        except requests.ConnectionError as e:
+            print("  retry after", e.__class__.__name__)
+            time.sleep(2 * (i + 1))
+    raise RuntimeError("failed after retries")
 
 
-@probe("BaoStock login + small query", 120)
+@probe("CSI constituents 000300 / 000905 (xlrd)")
+def _():
+    import pandas as pd
+    for code in ["000300", "000905"]:
+        url = f"https://oss-ch.csindex.com.cn/static/html/csindex/public/uploads/file/autofile/cons/{code}cons.xls"
+        r = get(url, headers={"User-Agent": BROWSER})
+        df = pd.read_excel(io.BytesIO(r.content), dtype=str)
+        print(code, r.status_code, df.shape, df.columns.tolist())
+        print(df.head(3).to_string())
+
+
+@probe("BaoStock 10y k-data x5, stock_basic, trade dates", 300)
 def _():
     import baostock as bs
+    bs.login()
+    for code in ["sh.600519", "sz.000001", "sz.300750", "sh.688981", "sh.601318"]:
+        t0 = time.time()
+        rs = bs.query_history_k_data_plus(code, "date,code,close,turn,tradestatus,pctChg,peTTM,isST",
+                                          start_date="2015-01-01", end_date="2026-11-04", frequency="d",
+                                          adjustflag="1")
+        n = 0
+        while rs.error_code == "0" and rs.next():
+            n += 1
+        print(code, rs.error_code, n, "rows", f"{time.time()-t0:.2f}s")
     t0 = time.time()
-    lg = bs.login()
-    print("login", lg.error_code, lg.error_msg, f"{time.time()-t0:.1f}s")
+    rs = bs.query_history_k_data_plus("sh.000300", "date,code,close", start_date="2015-01-01",
+                                      end_date="2026-11-04", frequency="d")
+    n = 0
+    while rs.error_code == "0" and rs.next():
+        n += 1
+    print("index sh.000300", n, f"{time.time()-t0:.2f}s")
     t0 = time.time()
-    rs = bs.query_history_k_data_plus("sh.600519", "date,code,close,turn,tradestatus,pctChg,peTTM,pbMRQ,isST",
-                                      start_date="2026-10-01", end_date="2026-11-04", frequency="d", adjustflag="1")
+    rs = bs.query_stock_basic()
     rows = []
     while rs.error_code == "0" and rs.next():
         rows.append(rs.get_row_data())
-    print("k", rs.error_code, rs.error_msg, len(rows), rows[-2:], f"{time.time()-t0:.1f}s")
-    t0 = time.time()
-    rs = bs.query_hs300_stocks(date="2020-06-30")
-    n = 0
-    first = None
-    while rs.error_code == "0" and rs.next():
-        n += 1
-        first = first or rs.get_row_data()
-    print("hs300@2020-06-30", rs.fields, n, first, f"{time.time()-t0:.1f}s")
-    t0 = time.time()
-    rs = bs.query_history_k_data_plus("sz.000001", "date,close,turn,peTTM,isST", start_date="2015-01-01",
-                                      end_date="2026-11-04", frequency="d", adjustflag="1")
-    m = 0
-    while rs.error_code == "0" and rs.next():
-        m += 1
-    print("10y k-data rows", m, f"{time.time()-t0:.1f}s")
-    rs = bs.query_stock_basic()
-    k = 0
-    sample = []
-    while rs.error_code == "0" and rs.next():
-        k += 1
-        if k <= 2:
-            sample.append(rs.get_row_data())
-    print("stock_basic", rs.fields, k, sample)
+    print("stock_basic", rs.error_code, rs.fields, len(rows), rows[:2], rows[-2:], f"{time.time()-t0:.2f}s")
+    recent = sorted([r for r in rows if r[4] == "1" and r[2] >= "2026-06-01"], key=lambda r: r[2])[-5:]
+    print("recent listings", recent)
     bs.logout()
 
 
-@probe("Tushare reachability")
+@probe("BaoStock hs300 constituents (long wait)", 240)
 def _():
-    r = requests.post("https://api.tushare.pro", json={"api_name": "trade_cal", "token": "", "params": {}}, timeout=20)
-    show(r, 300)
+    import baostock as bs
+    bs.login()
+    t0 = time.time()
+    rs = bs.query_hs300_stocks()
+    n = 0
+    while rs.error_code == "0" and rs.next():
+        n += 1
+    print("hs300 now", rs.error_code, rs.error_msg, n, f"{time.time()-t0:.1f}s")
+    bs.logout()
 
 
-@probe("Yahoo A-shares")
+@probe("SZSE IPO projects: row fields")
 def _():
-    import yfinance as yf
-    df = yf.download(["600519.SS", "000001.SZ", "000300.SS", "300750.SZ", "688981.SS"], period="1mo",
-                     auto_adjust=True, progress=False)
-    print(df["Close"].tail(3))
-    print(df["Volume"].tail(2))
-    info = yf.Ticker("600519.SS").info
-    print({k: info.get(k) for k in ["shortName", "trailingPE", "sharesOutstanding", "floatShares", "currency"]})
+    r = get("https://listing.szse.cn/api/ras/projectrends/query",
+            params={"bizType": 1, "pageIndex": 0, "pageSize": 2, "keyword": ""}, headers={"User-Agent": BROWSER})
+    d = r.json()
+    print("top keys", list(d.keys()))
+    rows = d.get("data") or []
+    print("n", len(rows))
+    for row in rows[:2]:
+        print(json.dumps(row, ensure_ascii=False)[:1500])
+    r = get("https://listing.szse.cn/api/ras/projectrends/query",
+            params={"bizType": 1, "pageIndex": 0, "pageSize": 5, "keyword": "宇树"}, headers={"User-Agent": BROWSER})
+    d = r.json()
+    print("search 宇树:", d.get("totalSize"), [(x.get("cmpnm"), x.get("prjst")) for x in d.get("data") or []])
 
 
-@probe("CSI official constituents xls (CSI 300)")
+@probe("SSE STAR IPO projects: row fields")
 def _():
-    import io
-    import pandas as pd
-    for url in [
-        "https://csi-web-dev.oss-cn-shanghai-finance-1-pub.aliyuncs.com/static/html/csindex/public/uploads/file/autofile/cons/000300cons.xls",
-        "https://oss-ch.csindex.com.cn/static/html/csindex/public/uploads/file/autofile/cons/000300cons.xls",
-    ]:
+    r = get("https://query.sse.com.cn/statusAction.do",
+            params={"isPagination": "true", "sqlId": "SH_XM_LB", "pageHelp.pageSize": 2, "pageHelp.pageNo": 1,
+                    "keyword": ""},
+            headers={"User-Agent": BROWSER, "Referer": "https://kcb.sse.com.cn/"})
+    d = r.json()
+    print("top keys", list(d.keys()))
+    res = d.get("result") or (d.get("pageHelp") or {}).get("data") or []
+    print("n", len(res), "total", (d.get("pageHelp") or {}).get("total"))
+    for row in res[:2]:
+        print(json.dumps(row, ensure_ascii=False)[:1500])
+    r = get("https://query.sse.com.cn/statusAction.do",
+            params={"isPagination": "true", "sqlId": "SH_XM_LB", "pageHelp.pageSize": 5, "pageHelp.pageNo": 1,
+                    "keyword": "宇树"},
+            headers={"User-Agent": BROWSER, "Referer": "https://kcb.sse.com.cn/"})
+    d = r.json()
+    res = d.get("result") or []
+    print("search 宇树:", [(x.get("stockAuditName"), x.get("currStatus")) for x in res][:5])
+
+
+@probe("SSE main board IPO projects: which sqlId")
+def _():
+    for sql in ["GP_GPZCZ_SHXXPL", "SH_XM_LB_ZB", "ZB_XM_LB"]:
+        r = get("https://query.sse.com.cn/statusAction.do",
+                params={"isPagination": "true", "sqlId": sql, "pageHelp.pageSize": 2, "pageHelp.pageNo": 1},
+                headers={"User-Agent": BROWSER, "Referer": "https://www.sse.com.cn/"})
         try:
-            r = requests.get(url, headers={"User-Agent": BROWSER}, timeout=25)
-            print(url[:60], r.status_code, r.headers.get("content-type"), len(r.content))
-            if r.status_code == 200:
-                df = pd.read_excel(io.BytesIO(r.content))
-                print(df.columns.tolist())
-                print(df.head(3).to_string())
-                print("rows", len(df))
-                break
+            d = r.json()
+            res = d.get("result") or []
+            print(sql, r.status_code, "keys", list(d.keys())[:8], "n", len(res))
+            if res:
+                print(json.dumps(res[0], ensure_ascii=False)[:800])
         except Exception as e:
-            print("fail", url[:60], e)
+            print(sql, r.status_code, "not json", r.text[:200])
 
 
-@probe("cninfo announcement search")
+@probe("cninfo: IPO prospectus / listing announcements")
 def _():
-    r = requests.post("http://www.cninfo.com.cn/new/hisAnnouncement/query",
-                      data={"pageNum": 1, "pageSize": 5, "column": "szse", "tabName": "fulltext",
-                            "searchkey": "首次公开发行", "seDate": "2026-10-01~2026-11-04", "isHLtitle": "true"},
-                      headers={"User-Agent": BROWSER}, timeout=25)
-    show(r, 1500)
-
-
-@probe("SZSE IPO project dynamics")
-def _():
-    r = requests.get("https://listing.szse.cn/api/ras/projectrends/query",
-                     params={"bizType": 1, "pageIndex": 0, "pageSize": 3}, headers={"User-Agent": BROWSER}, timeout=25)
-    show(r, 2500)
-
-
-@probe("SZSE IPO project search by name")
-def _():
-    r = requests.get("https://listing.szse.cn/api/ras/projectrends/query",
-                     params={"bizType": 1, "pageIndex": 0, "pageSize": 3, "keyword": "科技"},
-                     headers={"User-Agent": BROWSER}, timeout=25)
-    show(r, 1200)
-
-
-@probe("SSE IPO projects (STAR)")
-def _():
-    r = requests.get("https://query.sse.com.cn/statusAction.do",
-                     params={"isPagination": "true", "sqlId": "SH_XM_LB", "pageHelp.pageSize": 3, "pageHelp.pageNo": 1},
-                     headers={"User-Agent": BROWSER, "Referer": "https://kcb.sse.com.cn/"}, timeout=25)
-    show(r, 2500)
-
-
-@probe("SSE main-board IPO projects")
-def _():
-    r = requests.get("https://query.sse.com.cn/statusAction.do",
-                     params={"isPagination": "true", "sqlId": "GP_GPZCZ_SHXXPL", "pageHelp.pageSize": 3,
-                             "pageHelp.pageNo": 1},
-                     headers={"User-Agent": BROWSER, "Referer": "https://www.sse.com.cn/"}, timeout=25)
-    show(r, 1200)
-
-
-@probe("Nasdaq IPO calendar rows")
-def _():
-    r = requests.get("https://api.nasdaq.com/api/ipo/calendar?date=2026-10",
-                     headers={"User-Agent": BROWSER, "Accept": "application/json"}, timeout=20)
-    d = r.json()["data"]
-    for k in ["priced", "upcoming", "filed", "withdrawn"]:
-        sec = d.get(k) or {}
-        rows = sec.get("rows") if "rows" in sec else (sec.get("upcomingTable") or {}).get("rows")
-        print(k, list(sec.keys()), (rows or [])[:1], "n", len(rows or []))
-
-
-@probe("HKEX")
-def _():
-    r = requests.get("https://www1.hkexnews.hk/app/appindex.html", headers={"User-Agent": BROWSER}, timeout=25)
-    print("status", r.status_code, len(r.content))
+    for key in ["招股说明书", "上市公告书", "发行公告"]:
+        r = requests.post("http://www.cninfo.com.cn/new/hisAnnouncement/query",
+                          data={"pageNum": 1, "pageSize": 5, "column": "szse", "tabName": "fulltext",
+                                "searchkey": key, "seDate": "2026-09-01~2026-11-04", "isHLtitle": "true"},
+                          headers={"User-Agent": BROWSER}, timeout=25)
+        d = r.json()
+        print(key, "total", d.get("totalAnnouncement"))
+        for a in (d.get("announcements") or [])[:3]:
+            print("  ", a.get("secCode"), a.get("secName"), a.get("announcementTitle"), a.get("announcementTime"),
+                  a.get("adjunctUrl"), a.get("columnId"))
 
 
 def main():

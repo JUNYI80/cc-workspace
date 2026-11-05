@@ -111,12 +111,14 @@ def get_watch(entry: str, sec_contact: str) -> ipo.WatchStatus:
         except Exception:
             heads = []
             errors.append("新闻暂时无法获取")
-        try:
-            agent = f"t212quant personal research {sec_contact}".strip()
-            filings = ipo.sec_filings(entry, agent)
-        except Exception:
-            filings = []
-            errors.append("SEC 数据暂时无法获取（可在『账户与设置』填写联系邮箱，SEC 要求）")
+        filings = []
+        if "@" not in sec_contact:
+            errors.append("未查询 SEC 官方文件：SEC 要求查询者提供联系邮箱，可在『账户与设置』填写后启用。")
+        else:
+            try:
+                filings = ipo.sec_filings(entry, sec_contact)
+            except Exception:
+                errors.append("SEC 官方文件暂时无法获取，稍后刷新再试。")
     return ipo.watch_status(entry, heads, filings, calendar, errors=errors)
 
 

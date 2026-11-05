@@ -1,10 +1,12 @@
 """B-class: IPO tracking.
 
 Sources (all free, no key):
-  * Nasdaq IPO calendar: filed / upcoming / priced / withdrawn deals by month.
+  * Nasdaq's public IPO calendar: filed / upcoming / priced / withdrawn deals.
   * SEC EDGAR full-text search: S-1 / F-1 registration statements, which a
-    company must file publicly before listing in the US.
-  * Google News headlines (see news.py).
+    company must file publicly before listing in the US. SEC requires every
+    automated request to carry the requester's contact email, so this is
+    only used once the user has entered theirs in the settings.
+  * Headlines from reputable outlets via Google News (see news.py).
 
 For private companies on a watchlist (e.g. Anthropic) the module estimates
 how far along the road to an IPO they are: official data (SEC, Nasdaq) when
@@ -79,16 +81,18 @@ NEGATION = re.compile(r"no plans?|not plan|rules? out|ruled out|no rush|not in a
 # -- helpers --------------------------------------------------------------------
 
 def _get_json(url: str, params: dict, headers: dict, timeout: float = 20) -> dict:
-    """GET JSON, impersonating a browser's TLS when curl_cffi is available (Nasdaq needs it)."""
-    try:
-        from curl_cffi import requests as cffi
-
-        resp = cffi.get(url, params=params, headers=headers, impersonate="chrome", timeout=timeout)
-    except ImportError:
-        resp = requests.get(url, params=params, headers=headers, timeout=timeout)
+    resp = requests.get(url, params=params, headers=headers, timeout=timeout)
     if resp.status_code != 200:
         raise RuntimeError(f"HTTP {resp.status_code} from {url}")
     return resp.json()
+
+
+def sec_user_agent(contact_email: str) -> str:
+    """SEC's fair-access rules: automated requests must say who is asking."""
+    email = contact_email.strip()
+    if "@" not in email:
+        raise ValueError("SEC requires a contact email; enter yours in the settings")
+    return f"t212quant personal research {email}"
 
 
 def _date(value) -> date | None:
@@ -214,11 +218,13 @@ def parse_efts(data: dict, names: list[str]) -> list[Filing]:
     return sorted(out, key=lambda f: f.filed, reverse=True)
 
 
-def sec_filings(entry: str, user_agent: str, since: str = "2015-01-01",
+def sec_filings(entry: str, contact_email: str, since: str = "2015-01-01",
                 today: date | None = None, fetch=None) -> list[Filing]:
     names = aliases(entry)
     today = today or date.today()
-    fetch = fetch or (lambda params: _get_json(EFTS_URL, params, {"User-Agent": user_agent}))
+    if fetch is None:
+        headers = {"User-Agent": sec_user_agent(contact_email)}
+        fetch = lambda params: _get_json(EFTS_URL, params, headers)  # noqa: E731
     found: list[Filing] = []
     for name in names:
         params = {"q": f'"{name}"', "forms": REGISTRATION_FORMS, "dateRange": "custom",

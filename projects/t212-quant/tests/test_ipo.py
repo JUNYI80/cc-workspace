@@ -79,7 +79,7 @@ def test_sec_filings_searches_every_alias():
         seen.append(params["q"])
         return EFTS
 
-    out = ipo.sec_filings("Anthropic | Anthropic PBC", "test agent", today=TODAY, fetch=fetch)
+    out = ipo.sec_filings("Anthropic | Anthropic PBC", "me@example.com", today=TODAY, fetch=fetch)
     assert seen == ['"Anthropic"', '"Anthropic PBC"']
     assert len(out) == 1  # same filing found twice is listed once
 
@@ -162,3 +162,9 @@ def test_parse_rss():
     out = news.parse_rss(xml)
     assert [h.title for h in out] == ["Newer story", "Older story", "No date"]
     assert out[0].source == "Reuters" and out[2].published is None
+
+
+def test_sec_needs_a_contact_email():
+    with pytest.raises(ValueError):
+        ipo.sec_user_agent("")
+    assert ipo.sec_user_agent(" me@example.com ").endswith("me@example.com")

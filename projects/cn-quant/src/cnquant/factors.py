@@ -1,16 +1,22 @@
-"""A 股多因子：短期反转 + 低异常换手 + 低波动，按月调仓。
+"""A 股选股因子：默认用低波动，按月调仓。
 
-为什么不照搬美股的动量策略：在 A 股，过去一年的涨幅（动量）几乎没有预测力，
-反而是上个月涨得多的、换手突然放大的、波动大的股票，之后更容易跑输。
-参考：Liu, Stambaugh & Yuan (2019), "Size and Value in China", Journal of Financial Economics；
-以及大量 A 股实证研究中稳健的短期反转效应和低波动效应。
+为什么不照搬美股的动量策略：在 A 股，过去一年的涨幅（动量）几乎没有预测力。学术研究
+（Liu, Stambaugh & Yuan 2019, Journal of Financial Economics）和大量实证发现，A 股里
+短期反转、低换手、低波动更稳健。
+
+我们在中证 800 上用 2015–2026 年真实数据把这三个因子逐个测了一遍（持 20 只，含交易成本）：
+  * 只用低波动：年化 +7.6%，最大回撤 -39%，夏普 0.56，年换手约 2 倍；
+  * 只用短期反转：年化 +10.0%，但最大回撤 -51%，年换手 11 倍，成本很高；
+  * 只用低异常换手：年化 +7.6%，最大回撤 -66%；
+  * 三个合在一起反而最差：年化 +2.8%，最大回撤 -59%（同时满足"在跌、成交萎缩、波动低"的多是停滞股）；
+  * 对比：沪深 300 ETF 年化 +3.6%，最大回撤 -45%。
+所以默认只用低波动（风险调整后最好、换手最低），这也和中证低波动系列指数的长期表现一致。
+「大盘过滤」在所有组合里都降低了收益，默认关闭。
 
 每个月最后一个交易日：
   1. 只看中证 800（沪深 300 + 中证 500）成分股，排除 ST、停牌、上市不满一年的股票；
-  2. 三个因子分别排百分位：近一个月涨幅越低越好、异常换手（近 1 个月平均成交量 ÷
-     近 1 年平均成交量）越低越好、近半年波动越低越好；
-  3. 三个百分位取平均作为总分，等权买入总分最高的 N 只；
-  4. 沪深 300 跌破 200 日均线时，全部持有现金（可在页面上关掉）。
+  2. 按因子排百分位（低波动 = 近半年年化波动越低越好），等权买入得分最高的 N 只；
+  3. 可选：沪深 300 跌破 200 日均线时全部持有现金。
 
 另外，实际选股时会用最新市盈率排除亏损公司（历史市盈率拿不到，所以回测里没有这一步）。
 """
@@ -31,12 +37,13 @@ class Params:
     vol_window: int = 126  # 约半年
     min_listed_days: int = 365
     regime_window: int = 200
-    regime_filter: bool = True
+    regime_filter: bool = False
     buy_cost: float = 0.0015  # 佣金约 0.025% + 滑点约 0.1%，按 0.15% 估算
     sell_cost: float = 0.0020  # 再加 0.05% 印花税（只在卖出时收）
     rebalance_band: float = 0.01
-    # Weights of the three factors in the total score: reversal, low abnormal turnover, low volatility.
-    factor_weights: tuple[float, float, float] = (1 / 3, 1 / 3, 1 / 3)
+    # Weights in the total score: (reversal, low abnormal turnover, low volatility). Low volatility
+    # alone tested best on 2015-2026 data, see the module docstring.
+    factor_weights: tuple[float, float, float] = (0.0, 0.0, 1.0)
 
     @property
     def warmup(self) -> int:
@@ -77,7 +84,7 @@ def build_panel(close: pd.DataFrame, volume: pd.DataFrame, st_codes: set[str],
 
 
 def scores_on(panel: Panel, date: pd.Timestamp,
-              factor_weights: tuple[float, float, float] = (1 / 3, 1 / 3, 1 / 3)) -> pd.DataFrame:
+              factor_weights: tuple[float, float, float] = (0.0, 0.0, 1.0)) -> pd.DataFrame:
     """当天合格股票的因子值、百分位和总分，按总分从高到低。"""
     ok = panel.eligible.loc[date]
     df = pd.DataFrame({

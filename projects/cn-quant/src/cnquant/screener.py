@@ -1,4 +1,4 @@
-"""A 类：中证 800 多因子选股、按手数算买入股数、历史回测。"""
+"""A 类：中证 800 低波动选股、按手数算买入股数、历史回测。"""
 from __future__ import annotations
 
 import math

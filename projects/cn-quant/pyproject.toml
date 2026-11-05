@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "cnquant"
 version = "0.1.0"
-description = "A 股量化助手：中证 800 多因子选股、新股与 IPO 跟踪"
+description = "A 股量化助手：中证 800 低波动选股、新股与 IPO 跟踪"
 requires-python = ">=3.10"
 dependencies = [
     "numpy>=1.24",

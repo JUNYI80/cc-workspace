@@ -67,6 +67,20 @@ def get_backtest(top_n: int, regime: bool) -> dict:
     return screener.run_backtest(get_market(), params(top_n, regime))
 
 
+@st.cache_data(ttl=24 * 3600, show_spinner=False)
+def get_factor_comparison(top_n: int, regime: bool) -> pd.DataFrame:
+    variants = {"只用低波动": (0, 0, 1), "只用短期反转": (1, 0, 0), "只用低异常换手": (0, 1, 0),
+                "三个因子合在一起": (1, 1, 1)}
+    rows = {}
+    for label, fw in variants.items():
+        r = screener.run_backtest(get_market(), Params(top_n=top_n, regime_filter=regime,
+                                                       factor_weights=fw))["策略"]
+        s = backtest.summary(r.nav)
+        rows[label] = {"年化收益": f"{s['cagr']:+.1%}", "最大回撤": f"{s['max_drawdown']:.0%}",
+                       "夏普": f"{s['sharpe']:.2f}", "年换手": f"{r.turnover.sum() / 2 / s['years']:.0%}"}
+    return pd.DataFrame(rows).T
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_watch(entry: str) -> ipo.WatchStatus:
     name = ipo.aliases(entry)[0]
@@ -246,7 +260,7 @@ def page_overview() -> None:
 
     st.subheader("策略体检（用真实历史数据回测）")
     try:
-        st.caption("A 类 · 多因子选股：" + md(verdict(get_backtest(top_n, regime))))
+        st.caption("A 类 · 低波动选股：" + md(verdict(get_backtest(top_n, regime))))
     except Exception as exc:
         st.caption(f"回测暂时无法计算：{exc}")
     st.caption("回测不代表未来；所有策略都可能连续一两年跑输指数。")
@@ -261,8 +275,8 @@ def page_overview() -> None:
 
 
 def page_stocks() -> None:
-    st.title("A 类 · 多因子选股")
-    st.caption("每月从中证 800（沪深 300 + 中证 500）里，按 A 股最稳健的三个因子选股。只看数据，不听消息。")
+    st.title("A 类 · 低波动选股")
+    st.caption("每月从中证 800（沪深 300 + 中证 500）里选出波动最低的股票。只看数据，不听消息。")
     demo_banner()
     c1, c2, c3 = st.columns([1, 1, 1])
     capital = c1.number_input("准备投入多少钱（元）", min_value=10_000.0, max_value=100_000_000.0,
@@ -270,7 +284,8 @@ def page_stocks() -> None:
     top_n = c2.slider("买几只股票", 5, 30, int(settings["top_n"]),
                       help="越多越分散、越稳；资金少时减少只数，否则很多股票买不起一手。")
     regime = c3.toggle("大盘过滤", value=bool(settings["regime_filter"]),
-                       help="开启后，沪深 300 跌破 200 日均线时全部持有现金。")
+                       help="开启后，沪深 300 跌破 200 日均线时全部持有现金。2015–2026 年的回测里它在所有组合中"
+                            "都降低了收益，所以默认关闭。")
     if (capital, top_n, regime) != (settings["capital_cny"], settings["top_n"], settings["regime_filter"]):
         settings.update(capital_cny=capital, top_n=top_n, regime_filter=regime)
         if not DEMO:
@@ -330,9 +345,25 @@ def page_stocks() -> None:
         st.info(md(verdict(res)), icon=ICONS["info"])
         st.altair_chart(growth_chart(res))
         st.table(summary_table(res))
-        st.caption("回测含买卖成本（买 0.15%、卖 0.20%，卖出含印花税），现金按年化 1.5% 计息。基准是沪深 300 ETF "
+        st.caption("『成分股等权』是把同样这 800 只股票平均买入，和策略一样受幸存者偏差影响，所以是最公平的对比；"
+                   "两只 ETF 是真实可买的产品。回测含买卖成本（买 0.15%、卖 0.20%，卖出含印花税），现金按年化 1.5% 计息。基准是沪深 300 ETF "
                    "（510300）和中证 500 ETF（510500）。注意：回测用的是今天的成分股，过去被剔除的公司不在里面"
                    "（幸存者偏差），会高估所有曲线；排除亏损公司这一步也只在实际选股时做，回测里没有。")
+    with st.expander("为什么选低波动？（三个因子的真实数据对比）"):
+        st.markdown("用同样的中证 800 股票、同样的成本，把每个因子单独测一遍。点下面的按钮会重新计算（约 1 分钟）。")
+        if st.button("重新计算因子对比"):
+            with loading("正在计算……"):
+                st.table(get_factor_comparison(top_n, regime))
+        else:
+            st.markdown("""
+| 因子（持 20 只，2015–2026） | 年化收益 | 最大回撤 | 夏普 | 年换手 |
+|---|---|---|---|---|
+| **只用低波动（默认）** | **+7.6%** | **-39%** | **0.56** | **约 2 倍** |
+| 只用短期反转 | +10.0% | -51% | 0.47 | 约 11 倍 |
+| 只用低异常换手 | +7.6% | -66% | 0.43 | 约 7 倍 |
+| 三个因子合在一起 | +2.8% | -59% | 0.24 | 约 9 倍 |
+| 沪深 300 ETF | +3.6% | -45% | 0.28 | — |
+""")
     st.caption(SOURCES)
 
 
@@ -425,13 +456,14 @@ def page_help() -> None:
 
 | 板块 | 做什么 | 你要做什么 |
 |---|---|---|
-| A 类 · 多因子选股 | 每月从中证 800 里选出 20 只股票，算好每只买多少股 | 每月一次，照名单在证券 App 里买卖 |
+| A 类 · 低波动选股 | 每月从中证 800 里选出波动最低的 20 只股票，算好每只买多少股 | 每月一次，照名单在证券 App 里买卖 |
 | B 类 · 新股与 IPO | 跟踪公司的上市进度，提醒打新和解禁 | 看提醒，自己决定 |
 
 **A 类的原理**（针对 A 股的特点，不是照搬美股）
-- 在 A 股，过去一年涨得多的股票（动量）后面并不更强；反而上个月涨得多、成交突然放大、波动大的股票，之后更容易跑输。
-- 所以每月选：近 1 个月涨得少、成交没有异常放大、波动小的股票，并排除 ST 股、停牌股、上市不满一年的股票和亏损公司。
-- 沪深 300 跌破 200 日均线时全部换成现金（可以关掉），躲开大熊市。
+- 在 A 股，过去一年涨得多的股票（动量）后面并不更强；波动大的"妖股"长期反而跑输。
+- 每月从中证 800 里选出近半年波动最低的 20 只，排除 ST 股、停牌股、上市不满一年的股票和亏损公司。
+- 用 2015–2026 年真实数据测试，低波动年化 +7.6%、最大回撤 -39%，好于沪深 300 ETF（+3.6%、-45%）；详见『A 类』页面底部的因子对比。
+- 可选的大盘过滤（沪深 300 跌破 200 日均线时空仓）在回测里降低了收益，默认关闭。
 
 **B 类的原理**
 - A 股上市要经过：上市辅导 → 交易所受理 → 问询 → 上市委审议 → 证监会注册 → 发行上市。软件直接读取交易所的官方审核状态和巨潮资讯的公告。
@@ -449,7 +481,7 @@ def page_help() -> None:
 
 pages = st.navigation([
     st.Page(page_overview, title="今日概览", icon=":material/home:", default=True),
-    st.Page(page_stocks, title="A 类 · 多因子选股", icon=":material/trending_up:", url_path="stocks"),
+    st.Page(page_stocks, title="A 类 · 低波动选股", icon=":material/trending_up:", url_path="stocks"),
     st.Page(page_ipo, title="B 类 · 新股与 IPO", icon=":material/rocket_launch:", url_path="ipo"),
     st.Page(page_help, title="使用说明", icon=":material/help:", url_path="help"),
 ])

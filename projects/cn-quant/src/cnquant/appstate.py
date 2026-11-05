@@ -21,7 +21,7 @@ DEFAULT_WATCHLIST = [
 DEFAULT_SETTINGS = {
     "capital_cny": 100000.0,
     "top_n": 20,
-    "regime_filter": True,
+    "regime_filter": False,
     "watchlist": DEFAULT_WATCHLIST,
 }
 

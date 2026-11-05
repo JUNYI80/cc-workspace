@@ -3,7 +3,7 @@ name: real-data-check
 on:
   workflow_dispatch:
   push:
-    branches: [claude/focused-dirac-o1qp6d]
+    branches: [main, claude/focused-dirac-o1qp6d]
     paths: ["tools/**", "projects/**", ".github/workflows/real-data.yml"]
 
 jobs:

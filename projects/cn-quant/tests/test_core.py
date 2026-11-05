@@ -124,7 +124,7 @@ def test_picks_skip_loss_makers_and_size_lots():
 def test_regime_filter_goes_to_cash():
     m = synthetic_market()
     m.bench.iloc[-60:] *= 0.5  # market far below its 200-day average
-    p = factors.Params(top_n=5)
+    p = factors.Params(top_n=5, regime_filter=True)
     picks = screener.current_picks(m, p, 100_000)
     assert not picks.market_ok and (picks.table["shares"] == 0).all()
 

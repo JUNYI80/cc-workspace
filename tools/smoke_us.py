@@ -79,6 +79,20 @@ def screen_bt():
     return res
 
 
+@step("Robustness: strategy variants on real data", core=False)
+def variants():
+    rows = []
+    for top_n in (10, 20, 30):
+        for regime in (True, False):
+            res = screener.run_backtest(prices, universe.symbols,
+                                        screener.ScreenParams(top_n=top_n, regime_filter=regime))
+            s = metrics.summary(res["Strategy"].nav)
+            e = metrics.summary(res["All stocks, equal weight"].nav)
+            rows.append({"top_n": top_n, "regime": regime, "CAGR": s["CAGR"], "Sharpe": s["Sharpe"],
+                         "MaxDD": s["Max drawdown"], "EW CAGR": e["CAGR"], "EW Sharpe": e["Sharpe"]})
+    print(pd.DataFrame(rows).to_string(float_format=lambda v: f"{v:.3f}"))
+
+
 @step("Fundamentals for picks (Yahoo Finance)", core=False)
 def funds():
     f = screener.fundamentals(list(picks.table["symbol"]))

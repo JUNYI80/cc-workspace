@@ -168,3 +168,16 @@ def test_sec_needs_a_contact_email():
     with pytest.raises(ValueError):
         ipo.sec_user_agent("")
     assert ipo.sec_user_agent(" me@example.com ").endswith("me@example.com")
+
+
+def test_spacs_are_not_recent_ipos():
+    assert ipo.is_spac("BHAV Acquisition Corp II", "BHAIU")
+    assert ipo.is_spac("Some Holdings", "ABCDU")
+    assert not ipo.is_spac("Aspen Neuroscience, Inc.", "ASPE")
+    cal = pd.DataFrame([
+        {"status": "priced", "symbol": "ASPE", "company": "Aspen Neuroscience, Inc.", "price_low": 15.0,
+         "price_high": 15.0, "value_usd": 140e6, "date": date(2026, 10, 30)},
+        {"status": "priced", "symbol": "BHAIU", "company": "BHAV Acquisition Corp II", "price_low": 10.0,
+         "price_high": 10.0, "value_usd": 100e6, "date": date(2026, 10, 29)},
+    ])
+    assert list(ipo.recent_ipos(cal, today=TODAY)["symbol"]) == ["ASPE"]

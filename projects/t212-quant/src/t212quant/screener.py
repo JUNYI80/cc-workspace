@@ -7,6 +7,8 @@ winners rank above lottery tickets. Three filters on top:
 
   * the stock trades above its 200-day average (trend filter);
   * its 12-1 return is positive;
+  * its volatility is at least 10% a year: lower than that almost always
+    means a takeover has been agreed and the price is pinned to the offer;
   * the market itself (SPY) trades above its 200-day average; when it does
     not, the whole portfolio goes to cash (BIL). Momentum strategies suffer
     their worst losses right after market crashes; this cuts most of that.
@@ -70,6 +72,7 @@ class ScreenParams:
     regime_filter: bool = True
     cost_bps: float = 25.0  # ~0.10% spread + Trading 212's 0.15% FX fee on US stocks
     rebalance_band: float = 0.02
+    min_vol: float = 0.10  # below this the stock is usually a pinned takeover target
 
     @property
     def warmup(self) -> int:
@@ -141,7 +144,8 @@ def factor_panel(stocks: pd.DataFrame, market: pd.Series, p: ScreenParams) -> Pa
     sma = stocks.rolling(p.trend_window).mean()
     vs_sma = stocks / sma - 1
     score = momentum / vol
-    eligible = (vs_sma > 0) & (momentum > 0) & score.notna() & np.isfinite(score)
+    eligible = ((vs_sma > 0) & (momentum > 0) & (vol >= p.min_vol)
+                & score.notna() & np.isfinite(score))
     market_vs_sma = market / market.rolling(p.trend_window).mean() - 1
     market_ok = (market_vs_sma > 0) if p.regime_filter else pd.Series(True, index=market.index)
     return Panel(momentum, vol, vs_sma, score, eligible, market_ok, market_vs_sma)

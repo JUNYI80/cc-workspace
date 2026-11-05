@@ -181,6 +181,28 @@ def growth_chart(results: dict, labels: dict[str, str]) -> alt.LayerChart:
     return alt.layer(base.mark_line(strokeWidth=2), points, rule).properties(height=380)
 
 
+def verdict(results: dict, labels: dict[str, str], strategy: str = "Strategy") -> str:
+    """One honest sentence per benchmark: did the strategy earn more, and lose less?"""
+    s = metrics.summary(results[strategy].nav)
+    years = s["Years"]
+    parts = []
+    for k, r in results.items():
+        if k == strategy:
+            continue
+        b = metrics.summary(r.nav)
+        more = "高于" if s["CAGR"] > b["CAGR"] else "低于"
+        safer = "更小" if s["Max drawdown"] > b["Max drawdown"] else "更大"
+        parts.append(f"比『{labels[k]}』：年化收益{more}（{s['CAGR']:+.1%} 对 {b['CAGR']:+.1%}），"
+                     f"最大回撤{safer}（{s['Max drawdown']:.0%} 对 {b['Max drawdown']:.0%}）")
+    return f"过去 {years:.0f} 年的回测结论：" + "；".join(parts) + "。"
+
+
+def show_backtest(results: dict, labels: dict[str, str], unit: str, strategy: str = "Strategy") -> None:
+    st.info(md(verdict(results, labels, strategy)), icon=ICONS["info"])
+    st.altair_chart(growth_chart(results, labels))
+    st.table(summary_table(results, labels, unit))
+
+
 def summary_table(results: dict, labels: dict[str, str], unit: str) -> pd.DataFrame:
     rows = {}
     for k, r in results.items():
@@ -253,6 +275,18 @@ def page_overview() -> None:
         st.info("今天没有需要处理的事情。", icon=ICONS["info"])
     for a in alerts.sort(items):
         show_alert(a)
+
+    st.subheader("策略体检（用真实历史数据回测）")
+    try:
+        res = get_screen_backtest(int(settings["top_n"]))
+        st.caption("A 类 · 量化选股：" + md(verdict(res, {"Strategy": "量化选股", "S&P 500 (SPY)": "标普 500",
+                                                          "All stocks, equal weight": "全部股票平均持有"})))
+        cfg, _, _, etf_res = get_etf()
+        st.caption("ETF 轮动：" + md(verdict(etf_res, {"Strategy": "ETF 轮动",
+                                                       **{b.name: b.name for b in cfg.benchmarks}})))
+    except Exception as exc:
+        st.caption(f"回测暂时无法计算：{exc}")
+    st.caption("回测不代表未来；所有策略都可能连续一两年跑输简单持有指数。")
 
     with st.container(border=True):
         st.markdown(
@@ -339,8 +373,7 @@ def page_stocks() -> None:
             res = get_screen_backtest(top_n)
         labels = {"Strategy": "量化选股", "S&P 500 (SPY)": "标普 500",
                   "All stocks, equal weight": "全部股票平均持有"}
-        st.altair_chart(growth_chart(res, labels))
-        st.table(summary_table(res, labels, "美元"))
+        show_backtest(res, labels, "美元")
         st.caption("回测按美元计算，含每笔 0.25% 成本。注意：回测用的是今天的成分股，过去被踢出指数的"
                    "失败公司不在里面，所以三条线都被高估，选股策略高估得最多。过去表现不代表未来。")
     with tab2:
@@ -360,8 +393,7 @@ def page_stocks() -> None:
                     f"比 200 日均线 {row['vs_sma200']:+.1%}，近 3/6/12 个月平均涨幅 {row['score']:+.1%}。")
             labels = {"Strategy": "趋势规则", study.cfg.benchmarks[0].name: f"一直持有 {sym}",
                       study.cfg.benchmarks[1].name: "标普 500"}
-            st.altair_chart(growth_chart(study.results, labels))
-            st.table(summary_table(study.results, labels, "美元"))
+            show_backtest(study.results, labels, "美元")
             st.caption("趋势规则：股价在 200 日均线之上、且近期涨幅跑赢现金时持有，否则拿现金。"
                        "它主要帮你躲开大跌，不保证赚得更多。")
 
@@ -466,10 +498,9 @@ def page_etf() -> None:
         "目标仓位": held.values * 100,
     }), hide_index=True, column_config={"目标仓位": st.column_config.NumberColumn(format="%.1f%%")})
 
-    with st.expander("历史回测"):
+    with st.expander("历史回测", expanded=True):
         labels = {"Strategy": "ETF 轮动", **{b.name: b.name for b in cfg.benchmarks}}
-        st.altair_chart(growth_chart(res, labels))
-        st.table(summary_table(res, labels, "英镑"))
+        show_backtest(res, labels, "英镑")
 
     st.subheader("连接 Trading 212 调仓")
     env_label = st.radio("账户", ["模拟账户（Practice）", "真实账户（Live）"], horizontal=True)

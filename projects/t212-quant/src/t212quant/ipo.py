@@ -279,7 +279,8 @@ def watch_status(entry: str, headlines: list[news.Headline], filings: list[Filin
             s = rank.get(r["status"], 0)
             if s > stage:
                 stage, official = s, True
-                evidence = f"Nasdaq IPO 日历：{r['company']}（{words[r['status']]}，{r['date']}）"
+                code = f"，代码 {r['symbol']}" if isinstance(r["symbol"], str) and r["symbol"] else ""
+                evidence = f"Nasdaq IPO 日历：{r['company']}（{words[r['status']]}，{r['date']}{code}）"
     if filings and stage < 4:
         f = filings[0]
         stage, official, evidence = 4, True, f"SEC 文件：{f.form}，{f.filed}"
@@ -327,13 +328,25 @@ def post_ipo_advice(ipo_date: date, ipo_price: float | None, closes: pd.Series |
     return Advice("warn", "趋势偏弱：股价低于 50 日均线或发行价，暂不考虑。")
 
 
+SPAC_NAME = re.compile(r"\bacquisition\b|\bspac\b|blank check", re.I)
+
+
+def is_spac(company: str, symbol: str | None) -> bool:
+    """Blank-check shells list as units (ticker ending in U) and own no business yet."""
+    sym = symbol or ""
+    return bool(SPAC_NAME.search(company or "")) or (len(sym) == 5 and sym.endswith("U"))
+
+
 def recent_ipos(calendar: pd.DataFrame, today: date | None = None, max_age_days: int = 365,
                 min_value_usd: float = 50e6) -> pd.DataFrame:
-    """Priced deals from the last year that raised at least `min_value_usd`."""
+    """Operating companies (no SPACs) priced in the last year that raised at least `min_value_usd`."""
     today = today or date.today()
     df = calendar[(calendar["status"] == "priced") & calendar["symbol"].notna()].copy()
     df = df[df["date"].map(lambda d: d is not None and 0 <= (today - d).days <= max_age_days)]
     df = df[df["value_usd"].fillna(0) >= min_value_usd]
+    spac = pd.Series([is_spac(c, s) for c, s in zip(df["company"], df["symbol"])],
+                     index=df.index, dtype=bool)
+    df = df[~spac]
     df["ipo_price"] = df["price_high"]  # priced rows carry the final price in this field
     return df.reset_index(drop=True)
 

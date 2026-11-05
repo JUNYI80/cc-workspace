@@ -99,3 +99,14 @@ def test_download_parses_yfinance_frame(monkeypatch, tmp_path):
     assert out["A.L"].iloc[-1] == 1.2
     data.load_prices(["A.L", "B.L"], "2024-01-01", cache_dir=tmp_path)  # same set: from cache
     assert len(calls) == 1
+
+
+def test_half_published_last_day_is_dropped():
+    idx = pd.bdate_range("2026-10-01", periods=12)
+    df = pd.DataFrame({f"S{i}": [100.0 + i + d for d in range(12)] for i in range(10)}, index=idx)
+    df.iloc[-1, 1:] = float("nan")  # only one symbol has the newest day so far
+    out = clean_prices(df)
+    assert out.index[-1] == idx[-2]
+    repeat = pd.DataFrame({f"S{i}": [100.0 + i + d for d in range(11)] + [110.0 + i] for i in range(10)},
+                          index=idx)  # last day repeats the day before for every symbol
+    assert clean_prices(repeat).index[-1] == idx[-2]

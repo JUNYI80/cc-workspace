@@ -131,3 +131,18 @@ def test_warnings():
 def test_params_are_frozen():
     p = screener.ScreenParams()
     assert replace(p, top_n=3).top_n == 3 and p.warmup == 253
+
+
+def test_pinned_takeover_targets_are_excluded():
+    idx = pd.bdate_range("2024-01-01", periods=400)
+    import numpy as np
+
+    rng = np.random.default_rng(1)
+    normal = 100 * np.exp(np.cumsum(0.001 + rng.normal(0, 0.015, 400)))
+    pinned = 100 * np.exp(np.cumsum(np.r_[np.full(250, 0.002), np.full(150, 0.0001)]
+                                    + rng.normal(0, 0.0005, 400)))
+    px = pd.DataFrame({"NORM": normal, "PIN": pinned, "SPY": normal}, index=idx)
+    p = screener.ScreenParams(top_n=2, regime_filter=False)
+    panel = screener.factor_panel(px[["NORM", "PIN"]], px["SPY"], p)
+    assert panel.vol.iloc[-1]["PIN"] < p.min_vol
+    assert not panel.eligible.iloc[-1]["PIN"]

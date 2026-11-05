@@ -16,7 +16,7 @@ async function snap(page, name) {
   const exc = await page.$$eval('[data-testid="stException"]', els => els.map(e => e.innerText.slice(0, 500)));
   const errs = await page.$$eval('[data-testid="stAlertContentError"]', els => els.map(e => e.innerText.slice(0, 300)));
   console.log(`${name} | exceptions: ${exc.length ? JSON.stringify(exc) : 'none'} | error boxes: ${errs.length ? JSON.stringify(errs) : 'none'}`);
-  await page.screenshot({ path: `${out}/${name}.png`, fullPage: true });
+  await page.screenshot({ path: `${out}/${name}.jpg`, fullPage: true, type: 'jpeg', quality: 50 });
 }
 
 (async () => {

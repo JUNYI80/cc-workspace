@@ -68,12 +68,36 @@ def completed_closes(prices: pd.DataFrame) -> pd.DataFrame:
 
 
 def clean_prices(prices: pd.DataFrame, max_gap: int = 5) -> pd.DataFrame:
-    """Fix pence/pound unit glitches, forward-fill short gaps, drop empty rows."""
-    out = prices.copy().astype(float)
+    """Fix pence/pound unit glitches, drop half-published last days, fill short gaps."""
+    out = prices.copy().astype(float).dropna(how="all")
+    out = _drop_incomplete_tail(out)
     for col in out.columns:
         out[col] = _fix_unit_glitches(out[col])
     out = out.ffill(limit=max_gap)
     return out.dropna(how="all")
+
+
+def _drop_incomplete_tail(prices: pd.DataFrame, min_share: float = 0.8) -> pd.DataFrame:
+    """Yahoo publishes a day's closes over several minutes. When only some symbols
+    have the latest day, forward-filling would pass yesterday's price off as
+    today's, so such trailing days are dropped until they are complete."""
+    if prices.shape[1] < 5:
+        return prices
+    counts = prices.notna().sum(axis=1)
+    typical = counts.iloc[-30:].median()
+    end = len(prices)
+    while end > 1 and counts.iloc[end - 1] < min_share * typical:
+        end -= 1
+    # A day where nearly every price equals the day before is a repeat, not real trading.
+    while end > 2:
+        last, prev = prices.iloc[end - 1], prices.iloc[end - 2]
+        both = last.notna() & prev.notna()
+        if both.sum() == 0 or (last[both] == prev[both]).mean() < min_share:
+            break
+        end -= 1
+    if end < len(prices):
+        log.warning("Dropped %d incomplete latest day(s)", len(prices) - end)
+    return prices.iloc[:end]
 
 
 def _fix_unit_glitches(s: pd.Series) -> pd.Series:

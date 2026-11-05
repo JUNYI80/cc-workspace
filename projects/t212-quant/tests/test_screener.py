@@ -29,7 +29,7 @@ def test_weights_pick_top_n_equally(prices):
 
 
 def test_regime_filter_moves_everything_to_cash(prices):
-    p = screener.ScreenParams(top_n=5)
+    p = screener.ScreenParams(top_n=5, regime_filter=True)
     panel = screener.factor_panel(prices[SYMS], prices[screener.MARKET], p)
     down = panel.market_ok[~panel.market_ok & panel.market_vs_sma.notna()].index
     assert len(down), "synthetic data should contain a bear market"

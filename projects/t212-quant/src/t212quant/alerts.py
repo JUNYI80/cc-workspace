@@ -18,11 +18,12 @@ class Alert:
     text: str
 
 
-def market(market_vs_sma: float) -> Alert:
+def market(market_vs_sma: float, regime_filter: bool = False) -> Alert:
     if market_vs_sma > 0:
         return Alert("ok", "市场", f"美股大盘在 200 日均线之上（{market_vs_sma:+.1%}），整体趋势向上。")
-    return Alert("warn", "市场", f"美股大盘跌破 200 日均线（{market_vs_sma:+.1%}）。"
-                                 "A 类策略此时持有现金，不买股票。")
+    action = ("你开启了大盘过滤，A 类策略此时持有现金，不买股票。" if regime_filter
+              else "大盘偏弱，买入后波动可能更大。")
+    return Alert("warn", "市场", f"美股大盘跌破 200 日均线（{market_vs_sma:+.1%}）。{action}")
 
 
 def is_rebalance_window(today: date) -> bool:

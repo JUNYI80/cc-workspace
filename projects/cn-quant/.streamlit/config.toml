@@ -1,0 +1,13 @@
+# The launcher opens the browser itself; headless also skips Streamlit's first-run email prompt.
+[server]
+headless = true
+port = 8502
+
+[browser]
+gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"  # hide the developer "Deploy" button
+
+[theme]
+primaryColor = "#d03b2f"

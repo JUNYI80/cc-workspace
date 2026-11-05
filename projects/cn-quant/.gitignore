@@ -1,0 +1,8 @@
+# downloaded data, settings and history stay on this computer
+data/
+state/
+.env
+__pycache__/
+*.egg-info/
+.venv/
+.pytest_cache/

@@ -16,7 +16,8 @@ ENV_FILE = PROJECT_DIR / ".env"
 
 DEFAULT_SETTINGS = {
     "capital_gbp": 1000.0,
-    "top_n": 10,
+    "top_n": 20,
+    "regime_filter": False,
     "watchlist": DEFAULT_WATCHLIST,
     "sec_contact": "",
 }

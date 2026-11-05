@@ -7,16 +7,36 @@ on:
     paths: ["tools/**", "projects/**", ".github/workflows/real-data.yml"]
 
 jobs:
-  probe-cn:
+  cn:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -q requests pandas python-calamine yfinance
-      - run: python tools/probe_sources.py
+      - name: Install the China product
+        run: pip install -q -e "projects/cn-quant[dev]"
+      - name: Unit tests
+        run: python -m pytest -q projects/cn-quant
+      - name: Real-data end-to-end run
+        run: python tools/smoke_cn.py
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Screenshot the app on real data
+        run: |
+          npm install --no-save --silent playwright@1.56.1
+          npx playwright install --with-deps chromium > /dev/null
+          cd projects/cn-quant
+          python -m streamlit run src/cnquant/app.py --server.port 8502 > ../../streamlit-cn.log 2>&1 &
+          cd ../..
+          mkdir -p shots-cn
+          node tools/shots.js http://localhost:8502 shots-cn \
+            '[["", "overview", []], ["stocks", "stocks", []], ["ipo", "ipo", ["打新日历", "新股提醒", "审核动态"]]]'
+      - name: Print screenshots into the log
+        if: always()
+        run: python tools/dump_images.py shots-cn
 
   us:
     runs-on: ubuntu-latest

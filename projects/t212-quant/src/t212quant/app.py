@@ -57,21 +57,21 @@ def get_stock_prices(symbols: tuple[str, ...]) -> pd.DataFrame:
     return data.completed_closes(raw)
 
 
-def _screen_inputs(top_n: int):
+def _screen_inputs(top_n: int, regime: bool):
     universe = get_universe()
     prices = get_stock_prices(tuple(universe.symbols))
-    return universe, prices, screener.ScreenParams(top_n=top_n)
+    return universe, prices, screener.ScreenParams(top_n=top_n, regime_filter=regime)
 
 
 @st.cache_data(ttl=6 * 3600, show_spinner=False)
-def get_picks(top_n: int) -> screener.Picks:
-    universe, prices, p = _screen_inputs(top_n)
+def get_picks(top_n: int, regime: bool) -> screener.Picks:
+    universe, prices, p = _screen_inputs(top_n, regime)
     return screener.current_picks(prices, universe, p)
 
 
 @st.cache_data(ttl=6 * 3600, show_spinner=False)
-def get_screen_backtest(top_n: int) -> dict:
-    universe, prices, p = _screen_inputs(top_n)
+def get_screen_backtest(top_n: int, regime: bool) -> dict:
+    universe, prices, p = _screen_inputs(top_n, regime)
     return screener.run_backtest(prices, universe.symbols, p)
 
 
@@ -238,7 +238,7 @@ def page_overview() -> None:
 
     with loading():
         try:
-            picks = get_picks(int(settings["top_n"]))
+            picks = get_picks(int(settings["top_n"]), bool(settings["regime_filter"]))
         except Exception as exc:
             picks = None
             st.error(f"股票数据暂时无法下载，请检查网络后刷新页面。（{exc}）")
@@ -250,9 +250,9 @@ def page_overview() -> None:
         month = f"{today:%Y-%m}"
         symbols = list(picks.table["symbol"]) if picks.market_ok else []
         appstate.record_picks(history, month, symbols)
-        items.append(alerts.market(picks.market_vs_sma))
+        items.append(alerts.market(picks.market_vs_sma, bool(settings["regime_filter"])))
         items += alerts.picks(symbols, history, month, today, picks.market_ok)
-        cols[0].metric("美股大盘趋势", "向上" if picks.market_ok else "向下",
+        cols[0].metric("美股大盘趋势", "向上" if picks.market_vs_sma > 0 else "向下",
                        f"{picks.market_vs_sma:+.1%} 相对 200 日均线", border=True)
         cols[1].metric("A 类本月持股", f"{len(symbols)} 只" if symbols else "持有现金", border=True)
         cols[3].metric("下次调仓日", f"{picks.next_rebalance:%m 月 %d 日}", border=True)
@@ -278,7 +278,7 @@ def page_overview() -> None:
 
     st.subheader("策略体检（用真实历史数据回测）")
     try:
-        res = get_screen_backtest(int(settings["top_n"]))
+        res = get_screen_backtest(int(settings["top_n"]), bool(settings["regime_filter"]))
         st.caption("A 类 · 量化选股：" + md(verdict(res, {"Strategy": "量化选股", "S&P 500 (SPY)": "标普 500",
                                                           "All stocks, equal weight": "全部股票平均持有"})))
         cfg, _, _, etf_res = get_etf()
@@ -302,18 +302,22 @@ def page_stocks() -> None:
     st.caption("每月从标普 500 里选出涨势最强、最稳的股票。只看数据，不看公司故事。")
     demo_banner()
 
-    c1, c2, _ = st.columns([1, 1, 2])
+    c1, c2, c3 = st.columns([1, 1, 1])
     capital = c1.number_input("准备投入多少钱（英镑）", min_value=100.0, max_value=1_000_000.0,
                               value=float(settings["capital_gbp"]), step=100.0)
-    top_n = c2.slider("买几只股票", 5, 20, int(settings["top_n"]),
+    top_n = c2.slider("买几只股票", 5, 30, int(settings["top_n"]),
                       help="越多越分散、越稳；越少越集中、波动越大。")
-    if capital != settings["capital_gbp"] or top_n != settings["top_n"]:
-        settings.update(capital_gbp=capital, top_n=top_n)
-        appstate.save_settings(settings)
+    regime = c3.toggle("大盘过滤", value=bool(settings["regime_filter"]),
+                       help="开启后，标普 500 跌破 200 日均线时全部持有现金。过去 15 年里它让最大回撤小了一些，"
+                            "但每年收益少了 6–10 个百分点，所以默认关闭。")
+    if (capital, top_n, regime) != (settings["capital_gbp"], settings["top_n"], settings["regime_filter"]):
+        settings.update(capital_gbp=capital, top_n=top_n, regime_filter=regime)
+        if not DEMO:
+            appstate.save_settings(settings)
 
     with loading():
         try:
-            picks = get_picks(top_n)
+            picks = get_picks(top_n, regime)
         except Exception as exc:
             st.error(f"股票数据暂时无法下载，请检查网络后刷新页面。（{exc}）")
             return
@@ -338,7 +342,7 @@ def page_stocks() -> None:
         "排名": range(1, len(t) + 1),
         "代码": t["symbol"],
         "公司": [f["name"].get(s) or n for s, n in zip(t["symbol"], t["name"])],
-        "行业": t["sector"],
+        "行业": [f["sector"].get(s) or sec for s, sec in zip(t["symbol"], t["sector"])],
         "近 12 个月涨幅": t["momentum"] * 100,
         "年化波动": t["vol"] * 100,
         "高于 200 日均线": t["vs_sma"] * 100,
@@ -370,7 +374,7 @@ def page_stocks() -> None:
     tab1, tab2 = st.tabs(["历史回测", "单只股票分析"])
     with tab1:
         with loading("正在回测过去十几年的表现……"):
-            res = get_screen_backtest(top_n)
+            res = get_screen_backtest(top_n, regime)
         labels = {"Strategy": "量化选股", "S&P 500 (SPY)": "标普 500",
                   "All stocks, equal weight": "全部股票平均持有"}
         show_backtest(res, labels, "美元")
@@ -608,14 +612,14 @@ def page_help() -> None:
 
 | 板块 | 做什么 | 你要做什么 |
 |---|---|---|
-| A 类 · 量化选股 | 每月从标普 500 里选出涨势最强、最稳的 10 只股票 | 每月一次，照名单在 Trading 212 买卖 |
+| A 类 · 量化选股 | 每月从标普 500 里选出涨势最强、最稳的 20 只股票 | 每月一次，照名单在 Trading 212 买卖 |
 | B 类 · 新股与 IPO | 跟踪 Anthropic 这类公司的上市进度，提醒新股的风险点 | 看提醒，自己决定 |
 | ETF 轮动 | 在 10 只 ETF 里轮动，可以自动下单 | 可选，适合想省事的人 |
 
 **A 类的原理**（量化基金几十年来最常用的『动量』因子）
 - 过去一年涨得好、而且涨得稳的股票，接下来几个月更可能继续涨。
 - 只买股价在 200 日均线之上的股票。
-- 标普 500 自己跌破 200 日均线时，全部换成现金，躲开大熊市。
+- 可选的『大盘过滤』：标普 500 跌破 200 日均线时全部换成现金。用 2011–2026 年真实数据回测，它让最大回撤从约 -45% 降到约 -38%，但每年收益少了 6–10 个百分点，所以默认关闭，想更稳可以打开。
 
 **B 类的原理**
 - 公司上市要经过：传闻 → 聘请投行 → 秘密递交 → 公开递交 S-1 → 路演定价 → 上市。软件根据新闻和 SEC 文件判断走到了哪一步。

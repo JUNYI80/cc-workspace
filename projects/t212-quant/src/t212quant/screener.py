@@ -9,9 +9,10 @@ winners rank above lottery tickets. Three filters on top:
   * its 12-1 return is positive;
   * its volatility is at least 10% a year: lower than that almost always
     means a takeover has been agreed and the price is pinned to the offer;
-  * the market itself (SPY) trades above its 200-day average; when it does
-    not, the whole portfolio goes to cash (BIL). Momentum strategies suffer
-    their worst losses right after market crashes; this cuts most of that.
+  * optionally, the market itself (SPY) trades above its 200-day average;
+    when it does not, the whole portfolio goes to cash (BIL). Off by default:
+    on 2011-2026 data it cut the worst drawdown only a little (about -45% to
+    -38%) while costing 6-10 points of yearly return for every portfolio size.
 
 Hold the top N equally weighted, rebalance monthly.
 """
@@ -64,12 +65,12 @@ SECTORS_ZH = {
 
 @dataclass(frozen=True)
 class ScreenParams:
-    top_n: int = 10
+    top_n: int = 20
     mom_lookback: int = 252
     mom_skip: int = 21
     vol_window: int = 126
     trend_window: int = 200
-    regime_filter: bool = True
+    regime_filter: bool = False
     cost_bps: float = 25.0  # ~0.10% spread + Trading 212's 0.15% FX fee on US stocks
     rebalance_band: float = 0.02
     min_vol: float = 0.10  # below this the stock is usually a pinned takeover target
@@ -91,7 +92,7 @@ class Universe:
 
 def parse_spy_holdings(xlsx: bytes) -> tuple[pd.DataFrame, str]:
     """Stocks in State Street's SPY holdings file, and the file's "as of" date text."""
-    raw = pd.read_excel(io.BytesIO(xlsx), header=None)
+    raw = pd.read_excel(io.BytesIO(xlsx), header=None, engine="openpyxl")
     as_of = ""
     for v in raw.iloc[:6, 1]:
         if isinstance(v, str) and v.lower().startswith("as of"):

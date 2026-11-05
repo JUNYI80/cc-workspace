@@ -20,7 +20,7 @@ def isolated_state(tmp_path, monkeypatch):
 
 def test_settings_roundtrip_and_defaults():
     s = appstate.load_settings()
-    assert s["top_n"] == 10 and "Anthropic" in s["watchlist"]
+    assert s["top_n"] == 20 and s["regime_filter"] is False and "Anthropic" in s["watchlist"]
     s["watchlist"].append("X")  # must not leak into the defaults
     assert "X" not in appstate.load_settings()["watchlist"]
     s["top_n"] = 7

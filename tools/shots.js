@@ -6,10 +6,20 @@ const [base, out, pagesJson] = process.argv.slice(2);
 const pages = JSON.parse(pagesJson);
 
 async function settle(page) {
+  // Done = the script is not running and no spinner has been visible for 4 seconds.
   await page.waitForSelector('h1', { timeout: 600000 });
-  await page.waitForFunction(() => !document.querySelector('[data-testid="stStatusWidget"]'),
-    null, { timeout: 900000 }).catch(() => console.log('  (still running after wait)'));
-  await page.waitForTimeout(3000);
+  const deadline = Date.now() + 1200000;
+  let quietSince = null;
+  while (Date.now() < deadline) {
+    const busy = await page.evaluate(() =>
+      !!document.querySelector('[data-testid="stSpinner"]') ||
+      !!document.querySelector('[data-testid="stStatusWidget"] [data-testid="stStatusWidgetRunningIcon"]'));
+    if (busy) quietSince = null;
+    else if (quietSince === null) quietSince = Date.now();
+    else if (Date.now() - quietSince > 4000) return;
+    await page.waitForTimeout(1000);
+  }
+  console.log('  (still loading after 20 minutes)');
 }
 
 async function snap(page, name) {

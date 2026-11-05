@@ -10,12 +10,13 @@ STATE_DIR = PROJECT_DIR / "state"
 SETTINGS_FILE = STATE_DIR / "settings.json"
 HISTORY_FILE = STATE_DIR / "history.json"
 
+# 2026 年 11 月时还没在 A 股上市、常被报道有上市计划的公司（可在软件里修改）。
 DEFAULT_WATCHLIST = [
-    "宇树科技",
-    "智谱",
     "月之暗面",
-    "长鑫存储",
-    "摩尔线程",
+    "智谱",
+    "字节跳动",
+    "蚂蚁集团",
+    "大疆",
 ]
 DEFAULT_SETTINGS = {
     "capital_cny": 100000.0,

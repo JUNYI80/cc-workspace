@@ -277,6 +277,30 @@ def watch_status(entry: str, headlines: list[news.Headline], projects: list[Proj
                        recent[:8], projects, errors or [])
 
 
+def gather(entry: str, today: date | None = None) -> tuple[list, list[Project], list[Announcement], list[str]]:
+    """All sources for one watchlist entry, searched under every alias. Failures become messages."""
+    today = today or date.today()
+    heads, projects, anns, errors = [], [], [], []
+    for name in aliases(entry):
+        try:
+            heads += news.search(f"{name} 上市", limit=30)
+        except Exception:
+            errors.append(f"新闻暂时无法获取（{name}）")
+        for label, fn in (("深交所", szse_search), ("上交所", sse_search)):
+            try:
+                projects += fn(name)
+            except Exception:
+                errors.append(f"{label}审核信息暂时无法获取（{name}）")
+        try:
+            anns += cninfo_search(name, today - timedelta(days=365), today)
+        except Exception:
+            errors.append(f"巨潮资讯暂时无法获取（{name}）")
+    seen = set()
+    heads = [h for h in heads if not (h.link in seen or seen.add(h.link))]
+    heads.sort(key=lambda h: h.published or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+    return heads, list(dict.fromkeys(projects)), list(dict.fromkeys(anns)), errors
+
+
 # -- after listing ---------------------------------------------------------------------
 
 @dataclass(frozen=True)

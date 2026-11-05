@@ -13,6 +13,7 @@
 | 项目 | 说明 |
 |---|---|
 | [`projects/t212-quant`](projects/t212-quant/) | 量化助手：A 类量化选股、B 类新股与 IPO 跟踪、ETF 轮动（可连接 Trading 212）。双击 `start-windows.bat` 或 `start-mac.command` 启动 |
+| [`projects/cn-quant`](projects/cn-quant/) | A股量化助手：中证 800 多因子选股、A 股新股与 IPO 跟踪（交易所官方审核数据）。双击 `start-windows.bat` 或 `start-mac.command` 启动 |
 
 ## 历史文件
 

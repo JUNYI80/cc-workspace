@@ -8,7 +8,7 @@ import pandas as pd
 
 sys.path.insert(0, "projects/cn-quant/src")
 
-from cnquant import backtest, data, ipo, news, screener  # noqa: E402
+from cnquant import appstate, backtest, data, ipo, screener  # noqa: E402
 from cnquant.factors import Params  # noqa: E402
 
 FAILED = []
@@ -48,9 +48,14 @@ def market():
     bench = data.load_benchmarks()
     print("close", close.shape, close.index[0].date(), "->", close.index[-1].date())
     print("bench", bench.shape, bench.tail(2).to_string())
-    jumps = (close.pct_change(fill_method=None).abs() > data.MAX_DAILY_MOVE).sum().sum()
-    print("daily moves beyond limits after cleaning:", int(jumps))
-    assert jumps == 0 and len(close.columns) > 780
+    rets = close.pct_change(fill_method=None)
+    # The first 5 trading days after listing have no price limit, so big moves there are real.
+    after_debut = rets.apply(lambda s: s.where(s.notna().cumsum() > 6))
+    big = after_debut.stack()[after_debut.stack().abs() > data.MAX_DAILY_MOVE]
+    debut = rets.stack()[rets.stack().abs() > data.MAX_DAILY_MOVE]
+    print("moves beyond limits in first 5 days after listing (real):", len(debut) - len(big))
+    print("moves beyond limits afterwards (should be 0):", len(big), big.head(10).to_dict())
+    assert len(big) == 0 and len(close.columns) > 780
     return screener.Market(close, volume, bench, uni)
 
 
@@ -113,16 +118,10 @@ def cninfo():
 
 @step("Watchlist stages")
 def watch():
-    for entry in ["宇树科技", "智谱", "月之暗面", "长鑫存储", "摩尔线程"]:
+    for entry in ["宇树科技", "长鑫存储 | 长鑫科技"] + appstate.DEFAULT_WATCHLIST:
         name = ipo.aliases(entry)[0]
-        heads = news.search(f"{name} 上市", limit=30)
-        projects = []
-        for fn in (ipo.szse_search, ipo.sse_search):
-            try:
-                projects += fn(name)
-            except Exception as exc:
-                print("   (", fn.__name__, "failed:", exc, ")")
-        anns = ipo.cninfo_search(name, date.today() - timedelta(days=365), date.today())
+        heads, projects, anns, errors = ipo.gather(entry)
+        print("   errors:", errors)
         s = ipo.watch_status(entry, heads, projects, anns)
         print(f"{name}: stage {s.stage} {s.label} | code {s.code} | {s.evidence} | terminated {s.terminated}")
         for h in heads[:3]:

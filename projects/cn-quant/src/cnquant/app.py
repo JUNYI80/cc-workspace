@@ -16,7 +16,7 @@ import altair as alt  # noqa: E402
 import pandas as pd  # noqa: E402
 import streamlit as st  # noqa: E402
 
-from cnquant import alerts, appstate, backtest, data, demo, ipo, news, screener  # noqa: E402
+from cnquant import alerts, appstate, backtest, data, demo, ipo, screener  # noqa: E402
 from cnquant.factors import Params  # noqa: E402
 
 DEMO = os.getenv("CNQ_DEMO") == "1"
@@ -72,20 +72,7 @@ def get_watch(entry: str) -> ipo.WatchStatus:
     name = ipo.aliases(entry)[0]
     if DEMO:
         return ipo.watch_status(entry, demo.headlines(name), demo.projects(name), [])
-    errors, projects, anns, heads = [], [], [], []
-    try:
-        heads = news.search(f"{name} 上市", limit=30)
-    except Exception:
-        errors.append("新闻暂时无法获取")
-    for label, fn in (("深交所", ipo.szse_search), ("上交所", ipo.sse_search)):
-        try:
-            projects += fn(name)
-        except Exception:
-            errors.append(f"{label}审核信息暂时无法获取")
-    try:
-        anns = ipo.cninfo_search(name, date.today() - timedelta(days=365), date.today())
-    except Exception:
-        errors.append("巨潮资讯暂时无法获取")
+    heads, projects, anns, errors = ipo.gather(entry)
     return ipo.watch_status(entry, heads, projects, anns, errors=errors)
 
 
@@ -374,7 +361,8 @@ def page_ipo() -> None:
                         for h in s.headlines:
                             st.markdown(f"- {h.published:%m-%d}　[{md(h.title)}]({h.link})　*{md(h.source)}*")
         with st.expander("编辑关注名单"):
-            text = st.text_area("每行一家公司，用简称即可（例如：宇树科技）。", value="\n".join(settings["watchlist"]),
+            text = st.text_area("每行一家公司，用简称即可（例如：宇树科技）。公司正式名称不同时，用 | 隔开写上，"
+                                "例如：长鑫存储 | 长鑫科技", value="\n".join(settings["watchlist"]),
                                 height=150)
             if st.button("保存名单"):
                 settings["watchlist"] = [ln.strip() for ln in text.splitlines() if ln.strip()]

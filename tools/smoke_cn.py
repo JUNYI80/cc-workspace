@@ -75,6 +75,30 @@ def picks():
     return pk
 
 
+@step("Factor diagnostics (each factor alone, turnover)")
+def diag():
+    variants = {
+        "reversal only": (1, 0, 0), "low turnover only": (0, 1, 0), "low vol only": (0, 0, 1),
+        "turnover + low vol": (0, 1, 1), "all three": (1, 1, 1),
+    }
+    for regime in (False, True):
+        for label, fw in variants.items():
+            res = screener.run_backtest(market, Params(top_n=20, regime_filter=regime, factor_weights=fw))
+            r = res["策略"]
+            s = backtest.summary(r.nav)
+            years = s["years"]
+            turnover = r.turnover.sum() / 2 / years
+            print(f"regime={regime} {label:18s} CAGR {s['cagr']:+.1%} MaxDD {s['max_drawdown']:.0%} "
+                  f"Sharpe {s['sharpe']:.2f} turnover/yr {turnover:.0%}")
+    b = {k: backtest.summary(v.nav) for k, v in res.items() if k != "策略"}
+    print({k: f"{v['cagr']:+.1%}/{v['max_drawdown']:.0%}" for k, v in b.items()})
+    res = screener.run_backtest(market, Params(top_n=20, regime_filter=True))
+    dd = backtest.drawdown(res["策略"].nav)
+    print("worst drawdown trough", dd.idxmin().date(), f"{dd.min():.0%}",
+          "peak", res["策略"].nav.loc[:dd.idxmin()].idxmax().date())
+    print("invested share by year:", res["策略"].weights.sum(axis=1).groupby(lambda d: d.year).mean().round(2).to_dict())
+
+
 @step("Backtest + variants")
 def bt():
     for top_n in (10, 20, 30):

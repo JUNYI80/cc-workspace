@@ -127,3 +127,17 @@ def test_regime_filter_goes_to_cash():
     p = factors.Params(top_n=5)
     picks = screener.current_picks(m, p, 100_000)
     assert not picks.market_ok and (picks.table["shares"] == 0).all()
+
+
+def test_equal_weight_benchmark_invests_even_with_many_stocks():
+    m = synthetic_market(n_stocks=200)
+    res = screener.run_backtest(m, factors.Params(top_n=5, regime_filter=False))
+    assert res["成分股等权"].weights.sum(axis=1).min() > 0.9
+
+
+def test_factor_weights_change_the_ranking():
+    m = synthetic_market()
+    panel = m.panel(factors.Params(regime_filter=False))
+    d = m.close.index[-1]
+    lowvol = factors.scores_on(panel, d, (0, 0, 1))
+    assert list(lowvol.index) == list(lowvol.sort_values("volatility").index)

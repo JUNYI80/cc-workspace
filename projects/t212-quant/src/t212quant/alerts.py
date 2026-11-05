@@ -66,7 +66,9 @@ def watchlist(statuses: list[WatchStatus], history: dict, today: date) -> list[A
     return out
 
 
-def ipo_calendar(upcoming: pd.DataFrame, recent: pd.DataFrame, today: date) -> list[Alert]:
+def ipo_calendar(upcoming: pd.DataFrame, recent: pd.DataFrame, today: date,
+                 max_lockups: int = 3) -> list[Alert]:
+    """Upcoming listings, plus lock-up expiries in the next 14 days (largest deals first)."""
     out = []
     for _, r in upcoming.iterrows():
         when = r["date"].isoformat() if r["date"] else "日期待定"
@@ -74,11 +76,16 @@ def ipo_calendar(upcoming: pd.DataFrame, recent: pd.DataFrame, today: date) -> l
                  else "价格待定")
         out.append(Alert("info", "B 类新股", f"{r['company']}（{r['symbol'] or '代码待定'}）"
                                             f"预计 {when} 定价上市，区间 {price}。首日不追高。"))
-    for _, r in recent.iterrows():
+    soon = recent[recent["date"].map(lambda d: 0 <= (d + timedelta(days=LOCKUP_DAYS) - today).days <= 14)]
+    if "value_usd" in soon:
+        soon = soon.sort_values("value_usd", ascending=False, na_position="last")
+    for _, r in soon.head(max_lockups).iterrows():
         lockup = r["date"] + timedelta(days=LOCKUP_DAYS)
-        if 0 <= (lockup - today).days <= 14:
-            out.append(Alert("warn", "B 类新股", f"{r['company']}（{r['symbol']}）锁定期预计 "
-                                                f"{lockup:%Y-%m-%d} 到期，前后常有抛压。"))
+        out.append(Alert("warn", "B 类新股", f"{r['company']}（{r['symbol']}）锁定期预计 "
+                                            f"{lockup:%Y-%m-%d} 到期，前后常有抛压。"))
+    if len(soon) > max_lockups:
+        out.append(Alert("info", "B 类新股", f"另有 {len(soon) - max_lockups} 只新股的锁定期在两周内到期，"
+                                            "见『B 类 · 新股与 IPO』页面。"))
     return out
 
 

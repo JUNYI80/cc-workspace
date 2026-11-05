@@ -181,6 +181,11 @@ def growth_chart(results: dict, labels: dict[str, str]) -> alt.LayerChart:
     return alt.layer(base.mark_line(strokeWidth=2), points, rule).properties(height=380)
 
 
+def etf_labels(cfg) -> dict[str, str]:
+    names = {"Buy & hold VWRL": "一直持有 VWRL（全球股票）", "60/40 VWRL/IGLT": "60/40 股债组合"}
+    return {b.name: names.get(b.name, b.name) for b in cfg.benchmarks}
+
+
 def verdict(results: dict, labels: dict[str, str], strategy: str = "Strategy") -> str:
     """One honest sentence per benchmark: did the strategy earn more, and lose less?"""
     s = metrics.summary(results[strategy].nav)
@@ -283,7 +288,7 @@ def page_overview() -> None:
                                                           "All stocks, equal weight": "全部股票平均持有"})))
         cfg, _, _, etf_res = get_etf()
         st.caption("ETF 轮动：" + md(verdict(etf_res, {"Strategy": "ETF 轮动",
-                                                       **{b.name: b.name for b in cfg.benchmarks}})))
+                                                       **etf_labels(cfg)})))
     except Exception as exc:
         st.caption(f"回测暂时无法计算：{exc}")
     st.caption("回测不代表未来；所有策略都可能连续一两年跑输简单持有指数。")
@@ -503,7 +508,7 @@ def page_etf() -> None:
     }), hide_index=True, column_config={"目标仓位": st.column_config.NumberColumn(format="%.1f%%")})
 
     with st.expander("历史回测", expanded=True):
-        labels = {"Strategy": "ETF 轮动", **{b.name: b.name for b in cfg.benchmarks}}
+        labels = {"Strategy": "ETF 轮动", **etf_labels(cfg)}
         show_backtest(res, labels, "英镑")
 
     st.subheader("连接 Trading 212 调仓")

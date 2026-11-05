@@ -63,7 +63,7 @@ def next_rebalance_day(today: pd.Timestamp) -> pd.Timestamp:
 def candidates(m: Market, p: Params) -> pd.DataFrame:
     """今天总分最高的 3×N 只（还没做市盈率检查）。"""
     panel = m.panel(p)
-    return scores_on(panel, m.close.index[-1]).head(CANDIDATES * p.top_n)
+    return scores_on(panel, m.close.index[-1], p.factor_weights).head(CANDIDATES * p.top_n)
 
 
 def current_picks(m: Market, p: Params, capital: float, fundamentals: pd.DataFrame | None = None,
@@ -71,7 +71,7 @@ def current_picks(m: Market, p: Params, capital: float, fundamentals: pd.DataFra
     """本月名单：总分最高、且最新市盈率为正（不亏损）的 N 只，并按手数算出买多少股。"""
     panel = m.panel(p)
     date = m.close.index[-1]
-    ranked = scores_on(panel, date).head(CANDIDATES * p.top_n)
+    ranked = scores_on(panel, date, p.factor_weights).head(CANDIDATES * p.top_n)
     f = fundamentals if fundamentals is not None else pd.DataFrame(columns=["pe", "margin", "sector"])
     names = m.names()
     market_ok = bool(panel.market_ok.loc[date])
@@ -121,5 +121,7 @@ def run_backtest(m: Market, p: Params) -> dict[str, backtest.BacktestResult]:
                                      lambda d: pd.Series({"沪深300ETF": 1.0}), first),
         "中证500ETF": backtest.simulate(bench_rets[["中证500ETF"]],
                                      lambda d: pd.Series({"中证500ETF": 1.0}), first),
-        "成分股等权": backtest.simulate(rets, equal_weight, first, **kw),
+        # 800 stocks at 0.125% each: the no-trade band would stop this benchmark from ever buying.
+        "成分股等权": backtest.simulate(rets, equal_weight, first, buy_cost=p.buy_cost,
+                                    sell_cost=p.sell_cost),
     }

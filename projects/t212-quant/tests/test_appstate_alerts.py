@@ -96,3 +96,11 @@ def test_sort_puts_warnings_first():
 
 def test_lockup_days_constant():
     assert ipo.LOCKUP_DAYS == 180
+
+
+def test_only_the_largest_lockups_reach_the_overview():
+    recent = pd.DataFrame([{"company": f"Co{i}", "symbol": f"C{i}", "date": date(2026, 5, 20),
+                            "value_usd": 1e8 * i} for i in range(1, 7)])
+    out = alerts.ipo_calendar(pd.DataFrame(columns=["date"]), recent, date(2026, 11, 4))
+    assert [a.text.split("（")[0] for a in out[:3]] == ["Co6", "Co5", "Co4"]
+    assert "另有 3 只" in out[3].text

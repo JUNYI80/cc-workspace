@@ -35,6 +35,8 @@ class Params:
     buy_cost: float = 0.0015  # 佣金约 0.025% + 滑点约 0.1%，按 0.15% 估算
     sell_cost: float = 0.0020  # 再加 0.05% 印花税（只在卖出时收）
     rebalance_band: float = 0.01
+    # Weights of the three factors in the total score: reversal, low abnormal turnover, low volatility.
+    factor_weights: tuple[float, float, float] = (1 / 3, 1 / 3, 1 / 3)
 
     @property
     def warmup(self) -> int:
@@ -74,7 +76,8 @@ def build_panel(close: pd.DataFrame, volume: pd.DataFrame, st_codes: set[str],
     return Panel(reversal, abnormal, volatility, eligible, market_ok, market_vs_sma)
 
 
-def scores_on(panel: Panel, date: pd.Timestamp) -> pd.DataFrame:
+def scores_on(panel: Panel, date: pd.Timestamp,
+              factor_weights: tuple[float, float, float] = (1 / 3, 1 / 3, 1 / 3)) -> pd.DataFrame:
     """当天合格股票的因子值、百分位和总分，按总分从高到低。"""
     ok = panel.eligible.loc[date]
     df = pd.DataFrame({
@@ -87,7 +90,8 @@ def scores_on(panel: Panel, date: pd.Timestamp) -> pd.DataFrame:
     df["rank_reversal"] = (-df["reversal"]).rank(pct=True)
     df["rank_turnover"] = (-df["abnormal_turnover"]).rank(pct=True)
     df["rank_lowvol"] = (-df["volatility"]).rank(pct=True)
-    df["score"] = df[["rank_reversal", "rank_turnover", "rank_lowvol"]].mean(axis=1)
+    w = pd.Series(factor_weights, index=["rank_reversal", "rank_turnover", "rank_lowvol"])
+    df["score"] = (df[w.index] * w).sum(axis=1) / w.sum()
     return df.sort_values("score", ascending=False)
 
 
@@ -95,6 +99,6 @@ def weights_on(panel: Panel, date: pd.Timestamp, p: Params) -> pd.Series:
     w = pd.Series(0.0, index=panel.reversal.columns)
     if not bool(panel.market_ok.get(date, False)):
         return w
-    top = scores_on(panel, date).head(p.top_n).index
+    top = scores_on(panel, date, p.factor_weights).head(p.top_n).index
     w[top] = 1.0 / p.top_n
     return w

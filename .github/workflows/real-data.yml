@@ -68,3 +68,37 @@ jobs:
       - name: Print screenshots into the log
         if: always()
         run: python tools/dump_images.py shots-us
+
+  launchers:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+        product: [t212-quant, cn-quant]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: First start with the double-click launcher (installs everything)
+        shell: bash
+        run: |
+          cd "projects/${{ matrix.product }}"
+          if [ "${{ matrix.product }}" = "cn-quant" ]; then PORT=8502; else PORT=8501; fi
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            (cmd //c start-windows.bat < /dev/null > ../../launcher.log 2>&1 &)
+          else
+            (./start-mac.command < /dev/null > ../../launcher.log 2>&1 &)
+          fi
+          for i in $(seq 1 150); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:$PORT/" || true)
+            if [ "$code" = "200" ]; then echo "App is up on port $PORT after $((i * 5))s"; exit 0; fi
+            sleep 5
+          done
+          echo "App did not start"; exit 1
+      - name: Launcher output
+        if: always()
+        shell: bash
+        run: tail -40 launcher.log || true

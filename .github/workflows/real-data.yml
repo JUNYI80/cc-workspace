@@ -1,0 +1,19 @@
+name: real-data-check
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [claude/focused-dirac-o1qp6d]
+    paths: ["tools/**", ".github/workflows/real-data.yml"]
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -q requests pandas openpyxl lxml yfinance baostock
+      - run: python tools/probe_sources.py

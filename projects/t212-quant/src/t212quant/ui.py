@@ -93,7 +93,7 @@ def _style(chart, t: dict):
                         domainColor=t["axis"], tickColor=t["axis"], labelFontSize=12,
                         titleFontSize=12, titleFontWeight="normal", gridWidth=1)
         .configure_legend(labelColor=t["text"], labelFontSize=13, symbolStrokeWidth=3,
-                          symbolSize=160, columnPadding=18)
+                          symbolSize=160, columnPadding=18, labelLimit=400)
         .configure_title(color=t["text2"], fontSize=13, fontWeight="normal", anchor="start",
                          offset=10)
     )

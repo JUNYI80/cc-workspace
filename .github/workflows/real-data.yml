@@ -124,11 +124,16 @@ jobs:
                     "us-stocks\start-windows.bat", "cn-stocks\src\cnquant\app.py",
                     "量化助手（美股）.lnk", "A股量化助手.lnk")
           foreach ($f in $need) { if (-not (Test-Path (Join-Path $t $f))) { throw "missing: $f" } }
-          $s = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $t "A股量化助手.lnk"))
+          Copy-Item -LiteralPath (Join-Path $t "A股量化助手.lnk") "$env:TEMP\check.lnk"
+          $s = (New-Object -ComObject WScript.Shell).CreateShortcut("$env:TEMP\check.lnk")
           Write-Host "Shortcut target:" $s.TargetPath
           if ($s.TargetPath -ne (Join-Path $t "cn-stocks\start-windows.bat")) { throw "wrong shortcut target" }
           $desktop = [Environment]::GetFolderPath('Desktop')
-          Write-Host "Desktop: $desktop"; if ($desktop -and (Test-Path $desktop)) { Get-ChildItem $desktop -Filter *.lnk | Format-Table Name }
+          Write-Host "Desktop: $desktop"
+          if ($desktop -and (Test-Path $desktop)) {
+            foreach ($f in @("量化助手（美股）.lnk", "A股量化助手.lnk")) { if (-not (Test-Path (Join-Path $desktop $f))) { throw "missing on desktop: $f" } }
+            Write-Host "Both shortcuts are on the desktop"
+          }
       - name: Start both installed apps the way the shortcuts do
         shell: pwsh
         run: |

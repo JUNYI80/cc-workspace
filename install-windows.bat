@@ -51,9 +51,11 @@ if defined FAILED goto setup_failed
 
 rem ---- 4. Shortcuts: in the install folder, and on the desktop when there is one
 echo [4/4] 正在创建快捷方式……
-rem Chinese names are passed as character codes: the console code page garbles them otherwise.
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$t='%TARGET%'; $w=New-Object -ComObject WScript.Shell; $dirs=@($t); $d=[Environment]::GetFolderPath('Desktop'); if ($d -and (Test-Path $d)) { $dirs+=$d }; $apps=@(@((-join [char[]](0x91CF,0x5316,0x52A9,0x624B,0xFF08,0x7F8E,0x80A1,0xFF09)),'us-stocks'),@((-join [char[]](0x0041,0x80A1,0x91CF,0x5316,0x52A9,0x624B)),'cn-stocks')); foreach ($dir in $dirs) { foreach ($app in $apps) { $s=$w.CreateShortcut((Join-Path $dir ($app[0]+'.lnk'))); $s.TargetPath=(Join-Path $t ($app[1]+'\start-windows.bat')); $s.WorkingDirectory=(Join-Path $t $app[1]); $s.Save() } }"
-if errorlevel 1 echo       快捷方式没有创建成功，可以直接双击 %TARGET%\us-stocks\start-windows.bat
+rem Chinese names are passed as character codes (the console code page garbles them), and each
+rem shortcut is saved under a plain name first: Windows cannot save a shortcut whose name has
+rem characters outside the system code page, but it can rename one.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$t='%TARGET%'; $w=New-Object -ComObject WScript.Shell; $dirs=@($t); $d=[Environment]::GetFolderPath('Desktop'); if ($d -and (Test-Path $d)) { $dirs+=$d }; $apps=@(@((-join [char[]](0x91CF,0x5316,0x52A9,0x624B,0xFF08,0x7F8E,0x80A1,0xFF09)),'us-stocks'),@((-join [char[]](0x0041,0x80A1,0x91CF,0x5316,0x52A9,0x624B)),'cn-stocks')); foreach ($dir in $dirs) { foreach ($app in $apps) { $tmp=(Join-Path $dir ('quant-'+$app[1]+'.lnk')); $s=$w.CreateShortcut($tmp); $s.TargetPath=(Join-Path $t ($app[1]+'\start-windows.bat')); $s.WorkingDirectory=(Join-Path $t $app[1]); $s.Save(); Move-Item -Force -LiteralPath $tmp -Destination (Join-Path $dir ($app[0]+'.lnk')) } }"
+if errorlevel 1 goto no_shortcuts
 
 echo.
 echo ============================================================
@@ -99,6 +101,15 @@ pushd "%~1"
 if errorlevel 1 set "FAILED=1"
 popd
 exit /b 0
+
+:no_shortcuts
+echo.
+echo 软件已经装好，但快捷方式没有创建成功。
+echo 打开软件：双击 %TARGET%\us-stocks\start-windows.bat（美股）
+echo           或 %TARGET%\cn-stocks\start-windows.bat（A 股）
+if defined WORK rmdir /s /q "%WORK%" 2>nul
+if not defined QA_NO_PAUSE pause
+exit /b 2
 
 :no_source
 echo 下载失败：请检查网络后重新运行。

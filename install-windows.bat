@@ -51,7 +51,8 @@ if defined FAILED goto setup_failed
 
 rem ---- 4. Shortcuts: in the install folder, and on the desktop when there is one
 echo [4/4] 正在创建快捷方式……
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$t='%TARGET%'; $w=New-Object -ComObject WScript.Shell; $dirs=@($t); $d=[Environment]::GetFolderPath('Desktop'); if ($d -and (Test-Path $d)) { $dirs+=$d }; foreach ($dir in $dirs) { foreach ($app in @(@('量化助手（美股）','us-stocks'),@('A股量化助手','cn-stocks'))) { $s=$w.CreateShortcut((Join-Path $dir ($app[0]+'.lnk'))); $s.TargetPath=(Join-Path $t ($app[1]+'\start-windows.bat')); $s.WorkingDirectory=(Join-Path $t $app[1]); $s.Save() } }"
+rem Chinese names are passed as character codes: the console code page garbles them otherwise.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$t='%TARGET%'; $w=New-Object -ComObject WScript.Shell; $dirs=@($t); $d=[Environment]::GetFolderPath('Desktop'); if ($d -and (Test-Path $d)) { $dirs+=$d }; $apps=@(@((-join [char[]](0x91CF,0x5316,0x52A9,0x624B,0xFF08,0x7F8E,0x80A1,0xFF09)),'us-stocks'),@((-join [char[]](0x0041,0x80A1,0x91CF,0x5316,0x52A9,0x624B)),'cn-stocks')); foreach ($dir in $dirs) { foreach ($app in $apps) { $s=$w.CreateShortcut((Join-Path $dir ($app[0]+'.lnk'))); $s.TargetPath=(Join-Path $t ($app[1]+'\start-windows.bat')); $s.WorkingDirectory=(Join-Path $t $app[1]); $s.Save() } }"
 if errorlevel 1 echo       快捷方式没有创建成功，可以直接双击 %TARGET%\us-stocks\start-windows.bat
 
 echo.

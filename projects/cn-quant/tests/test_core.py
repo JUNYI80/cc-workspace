@@ -112,13 +112,44 @@ def test_picks_skip_loss_makers_and_size_lots():
     m = synthetic_market()
     p = factors.Params(top_n=3, regime_filter=False)
     cands = screener.candidates(m, p)
-    f = pd.DataFrame({"pe": [-5.0] + [12.0] * (len(cands) - 1), "margin": 0.1, "sector": "Industrials"},
-                     index=cands.index)
-    prices = {s: 10.0 for s in cands.index}
-    picks = screener.current_picks(m, p, 30_000, f, prices)
+    date, _ = screener.decision_dates(m.close.index)
+    best = factors.scores_on(m.panel(p), date, p.factor_weights).index[0]
+    f = pd.DataFrame({"pe": 12.0, "margin": 0.1, "sector": "Industrials"}, index=cands)
+    f.loc[best, "pe"] = -5.0
+    picks = screener.current_picks(m, p, 30_000, f, {s: 10.0 for s in cands})
     t = picks.table
-    assert len(t) == 3 and cands.index[0] not in set(t["yahoo"])
+    assert len(t) == 3 and best not in set(t["yahoo"])
     assert (t["shares"] % 100 == 0).all() and (t["cost"] <= 10_000).all()
+
+
+def test_list_is_fixed_within_a_month_and_reports_changes():
+    m = synthetic_market()
+    p = factors.Params(top_n=5, regime_filter=False)
+    day = m.close.index[-1]
+    last, before = screener.decision_dates(m.close.index, day)
+    assert last < day.replace(day=1) and before < last.replace(day=1)
+    picks = screener.current_picks(m, p, 100_000, today=day)
+    assert picks.as_of == last and picks.data_date == day
+    panel = m.panel(p)
+    now = set(factors.scores_on(panel, last, p.factor_weights).head(5).index)
+    then = set(factors.scores_on(panel, before, p.factor_weights).head(5).index)
+    assert set(picks.table["yahoo"]) == now
+    assert set(picks.added) == now - then and set(picks.removed) == then - now
+    m.close.iloc[-3:] *= 1.5  # later prices must not change this month's list
+    assert set(screener.current_picks(m, p, 100_000, today=day).table["yahoo"]) == now
+
+
+def test_unfinished_trading_day_is_dropped():
+    idx = pd.bdate_range("2026-11-02", "2026-11-13")
+    df = pd.DataFrame({"A": range(len(idx))}, index=idx)
+    during = pd.Timestamp("2026-11-13 10:30", tz="Asia/Shanghai")
+    after = pd.Timestamp("2026-11-13 16:00", tz="Asia/Shanghai")
+    assert data.drop_unfinished_day(df, during).index[-1] == pd.Timestamp("2026-11-12")
+    assert data.drop_unfinished_day(df, after).index[-1] == pd.Timestamp("2026-11-13")
+
+
+def test_beijing_exchange_codes_have_no_yahoo_symbol():
+    assert data.to_yahoo("920309") is None and data.to_yahoo("830799") is None
 
 
 def test_regime_filter_goes_to_cash():

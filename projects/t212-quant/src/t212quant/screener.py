@@ -194,17 +194,33 @@ def run_backtest(prices: pd.DataFrame, stocks: list[str], p: ScreenParams) -> di
 
 @dataclass
 class Picks:
-    as_of: pd.Timestamp
-    market_ok: bool
-    market_vs_sma: float
+    as_of: pd.Timestamp  # month-end close the list was decided on
+    data_date: pd.Timestamp  # latest close in the data
+    market_ok: bool  # False only when the market filter is on and says "cash"
+    market_vs_sma: float  # SPY against its 200-day average, latest close
     table: pd.DataFrame  # top N: symbol, name, sector, momentum, vol, vs_sma, score
+    added: list[str]  # in this month's list but not last month's
+    removed: list[str]
     next_rebalance: pd.Timestamp
 
 
-def current_picks(prices: pd.DataFrame, universe: Universe, p: ScreenParams) -> Picks:
-    stocks = [s for s in universe.symbols if s in prices.columns]
-    panel = factor_panel(prices[stocks], prices[MARKET], p)
-    date = prices.index[-1]
+def decision_dates(index: pd.DatetimeIndex, today: pd.Timestamp | None = None) -> tuple[pd.Timestamp, pd.Timestamp | None]:
+    """The last trading day of the previous calendar month, and of the month before that.
+
+    The backtest decides on each month-end close and trades the next day. The live list
+    uses the same rule, so it stays fixed for the whole month instead of changing daily.
+    """
+    today = pd.Timestamp(today or pd.Timestamp.today()).normalize()
+    month_start = today.replace(day=1)
+    before = index[index < month_start]
+    if before.empty:
+        return index[-1], None
+    last = before[-1]
+    earlier = index[index < last.replace(day=1)]
+    return last, (earlier[-1] if len(earlier) else None)
+
+
+def _top(panel: Panel, date: pd.Timestamp, p: ScreenParams) -> pd.DataFrame:
     row = pd.DataFrame({
         "momentum": panel.momentum.loc[date],
         "vol": panel.vol.loc[date],
@@ -212,16 +228,29 @@ def current_picks(prices: pd.DataFrame, universe: Universe, p: ScreenParams) -> 
         "score": panel.score.loc[date],
         "eligible": panel.eligible.loc[date],
     })
-    top = row[row["eligible"]].sort_values("score", ascending=False).head(p.top_n)
+    return row[row["eligible"]].sort_values("score", ascending=False).head(p.top_n)
+
+
+def current_picks(prices: pd.DataFrame, universe: Universe, p: ScreenParams,
+                  today: pd.Timestamp | None = None) -> Picks:
+    stocks = [s for s in universe.symbols if s in prices.columns]
+    panel = factor_panel(prices[stocks], prices[MARKET], p)
+    date, previous = decision_dates(prices.index, today)
+    top = _top(panel, date, p)
+    before = set(_top(panel, previous, p).index) if previous is not None else None
     info = universe.table.set_index("symbol")
     top = top.assign(name=info["name"].reindex(top.index), sector=info["sector"].reindex(top.index))
     top.index.name = "symbol"
+    now = set(top.index)
     return Picks(
         as_of=date,
+        data_date=prices.index[-1],
         market_ok=bool(panel.market_ok.loc[date]),
-        market_vs_sma=float(panel.market_vs_sma.loc[date]),
+        market_vs_sma=float(panel.market_vs_sma.iloc[-1]),
         table=top.reset_index().drop(columns="eligible"),
-        next_rebalance=next_rebalance_day(date),
+        added=sorted(now - before) if before is not None else [],
+        removed=sorted(before - now) if before is not None else [],
+        next_rebalance=next_rebalance_day(prices.index[-1]),
     )
 
 

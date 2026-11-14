@@ -59,6 +59,7 @@ def prices():
 @step("Current picks")
 def picks():
     p = screener.current_picks(prices, universe, screener.ScreenParams(top_n=10))
+    print("changes: +", p.added, "-", p.removed, "data to", p.data_date.date())
     print("as of", p.as_of.date(), "market ok", p.market_ok, f"SPY vs 200d {p.market_vs_sma:+.1%}",
           "next rebalance", p.next_rebalance.date())
     print(p.table.to_string())

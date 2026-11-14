@@ -48,13 +48,6 @@ def test_stage_changes_are_logged():
     assert appstate.load_history()["stages"]["Anthropic"] == 3
 
 
-def test_first_picks_of_the_month_are_kept():
-    h = appstate.load_history()
-    appstate.record_picks(h, "2026-11", ["A", "B"])
-    appstate.record_picks(h, "2026-11", ["C"])
-    assert h["picks"]["2026-11"] == ["A", "B"]
-
-
 def test_rebalance_window_is_first_three_weekdays():
     # November 2026 starts on a Sunday.
     assert not alerts.is_rebalance_window(date(2026, 11, 1))
@@ -64,11 +57,18 @@ def test_rebalance_window_is_first_three_weekdays():
 
 
 def test_picks_alert_lists_buys_and_sells():
-    h = {"picks": {"2026-10": ["AAPL", "MSFT"]}}
-    out = alerts.picks(["MSFT", "NVDA"], h, "2026-11", date(2026, 11, 20), market_ok=True)
+    out = alerts.picks(["NVDA"], ["AAPL"], date(2026, 11, 20), market_ok=True)
     assert len(out) == 1 and "买入 NVDA" in out[0].text and "卖出 AAPL" in out[0].text
-    on_day = alerts.picks(["MSFT"], h, "2026-11", date(2026, 11, 2), market_ok=False)
-    assert any("持有现金" in a.text for a in on_day)
+    assert alerts.picks([], [], date(2026, 11, 20), market_ok=True) == []
+    on_day = alerts.picks(["NVDA"], [], date(2026, 11, 2), market_ok=False)
+    assert len(on_day) == 1 and "持有现金" in on_day[0].text
+
+
+def test_listed_companies_are_not_a_standing_alert():
+    listed = ipo.WatchStatus("SpaceX", 6, True, "listed", 0)
+    filed = ipo.WatchStatus("Anthropic", 4, True, "filed", 3)
+    out = alerts.watchlist([listed, filed], {"stage_changes": []}, date(2026, 11, 4))
+    assert [a.text.split("：")[0] for a in out] == ["Anthropic"]
 
 
 def test_market_alert_levels():

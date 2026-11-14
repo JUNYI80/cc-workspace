@@ -102,3 +102,43 @@ jobs:
         if: always()
         shell: bash
         run: tail -40 launcher.log || true
+
+  installer:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - name: Install with the one-line command from the README
+        shell: pwsh
+        run: |
+          $env:QA_NO_PAUSE = "1"
+          irm "https://raw.githubusercontent.com/JUNYI80/cc-workspace/${{ github.sha }}/install-windows.bat" -OutFile "$env:TEMP\install-quant.bat"
+          cmd /c "$env:TEMP\install-quant.bat"
+          if ($LASTEXITCODE -ne 0) { throw "installer exit code $LASTEXITCODE" }
+      - name: Check what was installed
+        shell: pwsh
+        run: |
+          $t = if (Test-Path D:\) { "D:\QuantApps" } else { "$env:USERPROFILE\QuantApps" }
+          Write-Host "Install folder: $t"
+          Get-ChildItem $t | Format-Table Name, Length
+          $need = @("us-stocks\.venv\Scripts\streamlit.exe", "cn-stocks\.venv\Scripts\streamlit.exe",
+                    "us-stocks\start-windows.bat", "cn-stocks\src\cnquant\app.py",
+                    "量化助手（美股）.lnk", "A股量化助手.lnk")
+          foreach ($f in $need) { if (-not (Test-Path (Join-Path $t $f))) { throw "missing: $f" } }
+          $s = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $t "A股量化助手.lnk"))
+          Write-Host "Shortcut target:" $s.TargetPath
+          if ($s.TargetPath -ne (Join-Path $t "cn-stocks\start-windows.bat")) { throw "wrong shortcut target" }
+          $desktop = [Environment]::GetFolderPath('Desktop')
+          Write-Host "Desktop: $desktop"; if ($desktop -and (Test-Path $desktop)) { Get-ChildItem $desktop -Filter *.lnk | Format-Table Name }
+      - name: Start both installed apps the way the shortcuts do
+        shell: pwsh
+        run: |
+          $t = if (Test-Path D:\) { "D:\QuantApps" } else { "$env:USERPROFILE\QuantApps" }
+          foreach ($app in @(@("us-stocks", 8501), @("cn-stocks", 8502))) {
+            Start-Process cmd -ArgumentList "/c", (Join-Path $t "$($app[0])\start-windows.bat") -WorkingDirectory (Join-Path $t $app[0])
+            $ok = $false
+            foreach ($i in 1..60) {
+              try { if ((Invoke-WebRequest "http://localhost:$($app[1])/" -UseBasicParsing -TimeoutSec 5).StatusCode -eq 200) { $ok = $true; break } } catch { Start-Sleep 5 }
+            }
+            if (-not $ok) { throw "$($app[0]) did not start" }
+            Write-Host "$($app[0]) is up on port $($app[1])"
+          }

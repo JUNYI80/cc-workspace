@@ -1,2 +1,3 @@
-*.bat text eol=crlf
+# Stored with Windows line endings exactly as committed.
+*.bat -text
 *.command text eol=lf

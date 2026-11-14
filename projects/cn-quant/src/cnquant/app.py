@@ -12,15 +12,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # run as a script without install
 
-import altair as alt  # noqa: E402
 import pandas as pd  # noqa: E402
 import streamlit as st  # noqa: E402
 
-from cnquant import alerts, appstate, backtest, data, demo, ipo, screener  # noqa: E402
+from cnquant import alerts, appstate, backtest, data, demo, ipo, screener, ui  # noqa: E402
 from cnquant.factors import Params  # noqa: E402
 
 DEMO = os.getenv("CNQ_DEMO") == "1"
-COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100"]  # categorical slots 1-4 of the data-viz palette
 ICONS = {"warn": ":material/warning:", "ok": ":material/check_circle:", "info": ":material/info:"}
 SOURCES = ("数据来源：中证指数有限公司官网（成分股）、Yahoo Finance（行情和市盈率）、"
            "深圳证券交易所和上海证券交易所发行上市审核信息、巨潮资讯网（证监会指定信息披露网站）、"
@@ -32,6 +30,8 @@ if DEMO:
 settings = appstate.load_settings()
 if DEMO:
     settings["watchlist"] = demo.WATCHLIST
+ui.inject_css()
+ui.brand("A股量化助手", "沪深 A 股 · 中证 800")
 
 
 # -- data (cached) -----------------------------------------------------------------
@@ -52,7 +52,7 @@ def params(top_n: int, regime: bool) -> Params:
 @st.cache_data(ttl=6 * 3600, show_spinner=False)
 def get_picks(top_n: int, regime: bool, capital: float) -> screener.Picks:
     m, p = get_market(), params(top_n, regime)
-    cands = list(screener.candidates(m, p).index)
+    cands = screener.candidates(m, p)
     if DEMO:
         f = demo.fundamentals(cands)
         prices = {s: float(m.close[s].iloc[-1]) for s in cands}
@@ -122,6 +122,7 @@ def get_recent_projects() -> tuple[list[ipo.Project] | None, str | None]:
 
 @st.cache_data(ttl=6 * 3600, show_spinner=False)
 def get_listing_prices(symbols: tuple[str, ...]) -> pd.DataFrame:
+    symbols = tuple(s for s in symbols if s)  # Beijing exchange stocks have no Yahoo symbol
     if DEMO or not symbols:
         return pd.DataFrame()
     try:
@@ -132,6 +133,11 @@ def get_listing_prices(symbols: tuple[str, ...]) -> pd.DataFrame:
 
 
 # -- UI helpers ----------------------------------------------------------------------
+
+IPO_STEPS = ["有报道", "上市辅导", "已受理", "审核中", "注册发行", "已上市"]
+ADVICE = {"ok": "✓ 可关注", "info": "… 观察", "warn": "✕ 回避"}
+IDENTITY = {k: k for k in ("策略", "沪深300ETF", "中证500ETF", "成分股等权")}
+
 
 def md(text: str) -> str:
     return str(text).replace("$", "\\$")
@@ -151,32 +157,6 @@ def loading(msg: str = "正在下载最新数据……第一次打开需要 1–
     return st.spinner(msg)
 
 
-def growth_chart(results: dict) -> alt.LayerChart:
-    order = list(results)
-    df = pd.concat([
-        pd.DataFrame({"日期": r.nav.resample("W").last().index, "组合": k,
-                      "净值": r.nav.resample("W").last().to_numpy()})
-        for k, r in results.items()
-    ])
-    color = alt.Color("组合:N", scale=alt.Scale(domain=order, range=COLORS[: len(order)]),
-                      legend=alt.Legend(orient="top", title=None))
-    base = alt.Chart(df).encode(
-        x=alt.X("日期:T", title=None),
-        y=alt.Y("净值:Q", scale=alt.Scale(type="log"), title="1 份本金变成多少（对数坐标）"),
-        color=color,
-    )
-    hover = alt.selection_point(fields=["日期"], nearest=True, on="pointerover", empty=False)
-    rule = (alt.Chart(df).transform_pivot("组合", value="净值", groupby=["日期"])
-            .mark_rule(color="#8a8a8a")
-            .encode(x="日期:T", opacity=alt.condition(hover, alt.value(0.5), alt.value(0)),
-                    tooltip=[alt.Tooltip("日期:T", title="日期")]
-                    + [alt.Tooltip(f"{n}:Q", format=".2f") for n in order])
-            .add_params(hover))
-    points = base.mark_point(size=70, filled=True).encode(
-        opacity=alt.condition(hover, alt.value(1), alt.value(0)))
-    return alt.layer(base.mark_line(strokeWidth=2), points, rule).properties(height=380)
-
-
 def verdict(results: dict, strategy: str = "策略") -> str:
     s = backtest.summary(results[strategy].nav)
     parts = []
@@ -191,6 +171,18 @@ def verdict(results: dict, strategy: str = "策略") -> str:
     return f"过去 {s['years']:.0f} 年的回测结论：" + "；".join(parts) + "。"
 
 
+def headline_tiles(results: dict, bench: str = "沪深300ETF") -> None:
+    s, b = backtest.summary(results["策略"].nav), backtest.summary(results[bench].nav)
+    c = st.columns(4)
+    c[0].metric("年化收益", f"{s['cagr']:+.1%}", f"{(s['cagr'] - b['cagr']) * 100:+.1f} 个百分点", border=True)
+    c[1].metric("最大回撤（最多亏过）", f"{s['max_drawdown']:.0%}",
+                f"{(s['max_drawdown'] - b['max_drawdown']) * 100:+.0f} 个百分点", border=True)
+    c[2].metric("最差的一年", f"{s['worst_year']:+.1%}", border=True)
+    c[3].metric("10 万元变成", f"{100_000 * results['策略'].nav.iloc[-1]:,.0f}", border=True)
+    st.caption(f"小字是和『{bench}』相比的差距（{bench}：年化 {b['cagr']:+.1%}，最大回撤 {b['max_drawdown']:.0%}，"
+               f"10 万元变成 {100_000 * results[bench].nav.iloc[-1]:,.0f}）。")
+
+
 def summary_table(results: dict) -> pd.DataFrame:
     rows = {}
     for k, r in results.items():
@@ -198,6 +190,8 @@ def summary_table(results: dict) -> pd.DataFrame:
         rows[k] = {
             "本金 10 万元变成": f"{100_000 * r.nav.iloc[-1]:,.0f}",
             "年化收益": f"{s['cagr']:+.1%}",
+            "年化波动": f"{s['vol']:.1%}",
+            "夏普比率": f"{s['sharpe']:.2f}",
             "最大回撤（最多亏过）": f"{s['max_drawdown']:.1%}",
             "最差的一年": f"{s['worst_year']:+.1%}",
         }
@@ -231,15 +225,17 @@ def page_overview() -> None:
 
     cols = st.columns(4)
     if picks is not None:
-        month = f"{today:%Y-%m}"
-        codes = list(picks.table["yahoo"]) if picks.market_ok and not picks.table.empty else []
-        appstate.record_picks(history, month, codes)
-        items.append(alerts.market(picks.market_vs_sma))
-        items += alerts.picks(codes, get_market().names(), history, month, today, picks.market_ok)
-        cols[0].metric("沪深 300 趋势", "向上" if picks.market_vs_sma > 0 else "向下",
-                       f"{picks.market_vs_sma:+.1%} 相对 200 日均线", border=True)
-        cols[1].metric("A 类本月持股", f"{len(codes)} 只" if codes else "持有现金", border=True)
-        cols[3].metric("下次调仓日", f"{picks.next_rebalance:%m 月 %d 日}", border=True)
+        held = len(picks.table) if picks.market_ok else 0
+        items.append(alerts.market(picks.market_vs_sma, regime))
+        items += alerts.picks(picks.added, picks.removed, get_market().names(), today, picks.market_ok)
+        bench = get_market().bench["沪深300ETF"].dropna().iloc[-250:]
+        cols[0].metric("沪深 300（对比 200 日均线）", "向上" if picks.market_vs_sma > 0 else "向下",
+                       f"{picks.market_vs_sma:+.1%}", border=True, height="stretch",
+                       chart_data=bench.round(3).tolist(), chart_type="line")
+        cols[1].metric("A 类本月持股", f"{held} 只" if held else "持有现金",
+                       f"买入 {len(picks.added)} · 卖出 {len(picks.removed)}", delta_color="off",
+                       delta_arrow="off", border=True, height="stretch")
+        cols[3].metric("下次调仓日", f"{picks.next_rebalance:%m 月 %d 日}", border=True, height="stretch")
     for s in statuses:
         appstate.record_stage(history, s.name, s.stage, today)
     items += alerts.watchlist(statuses, history, today)
@@ -249,8 +245,8 @@ def page_overview() -> None:
         items += alerts.unlocks(listings, today)
     appstate.save_history(history)
     cols[2].metric("B 类关注公司", f"{len(statuses)} 家",
-                   f"最高进度：{max((s.stage for s in statuses), default=0)}/6", border=True,
-                   delta_color="off")
+                   f"最高进度 {max((s.stage for s in statuses), default=0)}/6", border=True,
+                   delta_color="off", delta_arrow="off", height="stretch")
 
     st.subheader("提醒")
     if not items:
@@ -258,12 +254,22 @@ def page_overview() -> None:
     for a in alerts.sort(items):
         show_alert(a)
 
-    st.subheader("策略体检（用真实历史数据回测）")
+    st.subheader("策略体检")
+    st.caption("用真实历史数据回测。回测不代表未来；所有策略都可能连续一两年跑输指数。")
     try:
-        st.caption("A 类 · 低波动选股：" + md(verdict(get_backtest(top_n, regime))))
+        res = get_backtest(top_n, regime)
+        s, b = backtest.summary(res["策略"].nav), backtest.summary(res["沪深300ETF"].nav)
+        with st.container(border=True):
+            st.markdown("**A 类 · 低波动选股**")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("年化收益", f"{s['cagr']:+.1%}", f"{(s['cagr'] - b['cagr']) * 100:+.1f} 个百分点")
+            c2.metric("最大回撤", f"{s['max_drawdown']:.0%}",
+                      f"{(s['max_drawdown'] - b['max_drawdown']) * 100:+.0f} 个百分点")
+            c3.metric("最差的一年", f"{s['worst_year']:+.1%}")
+            st.caption(f"对比『沪深300ETF』（年化 {b['cagr']:+.1%}，最大回撤 {b['max_drawdown']:.0%}），"
+                       f"回测 {s['years']:.0f} 年。")
     except Exception as exc:
         st.caption(f"回测暂时无法计算：{exc}")
-    st.caption("回测不代表未来；所有策略都可能连续一两年跑输指数。")
     with st.container(border=True):
         st.markdown(
             "**每个月只需要做一次：**\n"
@@ -294,44 +300,60 @@ def page_stocks() -> None:
     with loading():
         try:
             picks = get_picks(top_n, regime, capital)
+            market = get_market()
         except Exception as exc:
             st.error(f"行情数据暂时无法下载，请检查网络后刷新页面。（{exc}）")
             return
-    st.caption(f"数据截至 {picks.as_of:%Y-%m-%d} 收盘")
-    if picks.market_ok:
-        st.success(f"本月买入下面 {len(picks.table)} 只，每只约 ¥{capital / top_n:,.0f}。", icon=ICONS["ok"])
-    else:
-        st.warning(f"沪深 300 跌破 200 日均线（{picks.market_vs_sma:+.1%}）：本月**不买股票**，持有现金"
-                   "（或货币基金）。下面的名单仅供参考。", icon=ICONS["warn"])
     t = picks.table
+    st.caption(f"名单按 {picks.as_of:%Y-%m-%d} 收盘计算，本月内不变　·　行情截至 {picks.data_date:%Y-%m-%d}")
     if t.empty:
-        st.info("今天没有符合条件的股票。")
+        st.info("这个月没有符合条件的股票。")
         return
+    names = market.names()
+    if not picks.market_ok:
+        st.warning("你开启了大盘过滤，沪深 300 在月底时低于 200 日均线：本月**不买股票**，持有现金"
+                   "（或货币基金）。下面的名单仅供参考。", icon=ICONS["warn"])
+    else:
+        trend = (f"沪深 300 比 200 日均线高 {picks.market_vs_sma:.1%}" if picks.market_vs_sma > 0
+                 else f"注意：沪深 300 比 200 日均线低 {-picks.market_vs_sma:.1%}，大盘偏弱")
+        st.success(f"本月买入下面 {len(t)} 只，每只约 ¥{capital / top_n:,.0f}。{trend}。", icon=ICONS["ok"])
+        if picks.added or picks.removed:
+            label = lambda codes: "、".join(names.get(c, c) for c in codes) or "无"  # noqa: E731
+            st.info(f"相比上月名单　买入：{label(picks.added)}　｜　卖出：{label(picks.removed)}",
+                    icon=":material/swap_horiz:")
+
     tips = []
     for _, r in t.iterrows():
         tip = []
         if picks.market_ok and r["shares"] == 0:
             tip.append("钱不够买一手" if r["board"] != "科创板" else "钱不够买 200 股")
-        if r["pe"] is not None and isinstance(r["pe"], float) and r["pe"] > 80:
+        if isinstance(r["pe"], float) and r["pe"] > 80:
             tip.append("估值很高")
         tips.append("；".join(tip))
     table = pd.DataFrame({
         "排名": range(1, len(t) + 1), "代码": t["code"], "名称": t["name"], "板块": t["board"],
-        "近 1 个月涨跌": t["reversal"] * 100, "异常换手": t["abnormal_turnover"],
-        "年化波动": t["volatility"] * 100, "市盈率": t["pe"], "最新价": t["price"],
+        "半年走势": ui.sparkline_rows(market.close, list(t["yahoo"])),
+        "年化波动": t["volatility"] * 100, "近 1 个月涨跌": t["reversal"] * 100,
+        "市盈率": t["pe"], "最新价": t["price"],
         "建议买入（股）": t["shares"], "约需金额": t["cost"], "提示": tips,
     })
-    st.dataframe(table, hide_index=True, column_config={
-        "近 1 个月涨跌": st.column_config.NumberColumn(format="%.1f%%"),
-        "异常换手": st.column_config.NumberColumn(format="%.2f", help="近 1 个月平均成交量 ÷ 近 1 年平均成交量，越低越好"),
-        "年化波动": st.column_config.NumberColumn(format="%.1f%%", help="越低越稳"),
+    st.dataframe(table, hide_index=True, height=35 * (len(table) + 1) + 3, column_config={
+        "排名": st.column_config.NumberColumn(width="small"),
+        "半年走势": st.column_config.LineChartColumn(width="small", help="最近约 6 个月的复权股价走势"),
+        "年化波动": st.column_config.NumberColumn(format="%.0f%%", help="选股依据：越低越稳"),
+        "近 1 个月涨跌": st.column_config.NumberColumn(format="%+.1f%%"),
         "市盈率": st.column_config.NumberColumn(format="%.1f"),
         "最新价": st.column_config.NumberColumn(format="¥%.2f"),
         "约需金额": st.column_config.NumberColumn(format="¥%.0f"),
         "提示": st.column_config.TextColumn(width="medium"),
     })
     st.caption(f"买入合计约 ¥{t['cost'].sum():,.0f}，剩余资金留作现金。")
-    with st.container(border=True):
+
+    left, right = st.columns([1, 1])
+    with left:
+        counts = t["board"].value_counts().rename_axis("板块").reset_index(name="只数")
+        ui.hbar(counts, "板块", "只数", "板块分布（只数）")
+    with right.container(border=True):
         st.markdown(
             "**怎么操作**\n"
             "1. 打开你的证券 App（A 股需要在国内券商开户；Trading 212 不能买 A 股）。\n"
@@ -339,16 +361,20 @@ def page_stocks() -> None:
             f"3. 下次调仓日（{picks.next_rebalance:%m 月 %d 日}）回来：不在新名单里的卖掉，新进的买入。\n\n"
             "A 股是 T+1：今天买的明天才能卖。卖出时收 0.05% 印花税，佣金一般约万分之 2.5（不足 5 元按 5 元收）。"
         )
+
     with st.expander("历史回测", expanded=True):
         with loading("正在回测过去十年的表现……"):
             res = get_backtest(top_n, regime)
         st.info(md(verdict(res)), icon=ICONS["info"])
-        st.altair_chart(growth_chart(res))
-        st.table(summary_table(res))
+        headline_tiles(res)
+        ui.performance_charts(res, IDENTITY)
+        ui.yearly_chart(res, IDENTITY, backtest.calendar_returns)
+        with st.expander("详细数字"):
+            st.table(summary_table(res))
         st.caption("『成分股等权』是把同样这 800 只股票平均买入，和策略一样受幸存者偏差影响，所以是最公平的对比；"
-                   "两只 ETF 是真实可买的产品。回测含买卖成本（买 0.15%、卖 0.20%，卖出含印花税），现金按年化 1.5% 计息。基准是沪深 300 ETF "
-                   "（510300）和中证 500 ETF（510500）。注意：回测用的是今天的成分股，过去被剔除的公司不在里面"
-                   "（幸存者偏差），会高估所有曲线；排除亏损公司这一步也只在实际选股时做，回测里没有。")
+                   "两只 ETF（510300、510500）是真实可买的产品。回测含买卖成本（买 0.15%、卖 0.20%，卖出含印花税），"
+                   "现金按年化 1.5% 计息。注意：回测用的是今天的成分股，过去被剔除的公司不在里面（幸存者偏差），"
+                   "会高估所有曲线；排除亏损公司这一步也只在实际选股时做，回测里没有。")
     with st.expander("为什么选低波动？（三个因子的真实数据对比）"):
         st.markdown("用同样的中证 800 股票、同样的成本，把每个因子单独测一遍。点下面的按钮会重新计算（约 1 分钟）。")
         if st.button("重新计算因子对比"):
@@ -378,13 +404,17 @@ def page_ipo() -> None:
             statuses = watch_statuses()
         for s in statuses:
             with st.container(border=True):
-                st.subheader(s.name)
-                st.progress(s.stage / 6, text=f"上市进度：**{s.label}**（{s.stage}/6）")
+                head, badge = st.columns([4, 1])
+                head.subheader(s.name + (f"　{s.code}" if s.code else ""))
+                if s.stage:
+                    badge.badge("官方数据" if s.official else "据新闻", color="blue" if s.official else "gray",
+                                icon=":material/verified:" if s.official else ":material/newspaper:")
+                ui.stepper(s.stage, IPO_STEPS, s.official)
+                st.markdown(f"**{s.label}**" + (f"　·　近 30 天相关新闻 {s.heat} 条" if s.heat else ""))
                 if s.evidence:
                     st.caption(f"依据：{md(s.evidence)}")
                 if s.terminated:
                     st.caption(f":orange[最近一次申请已终止：{s.terminated}]")
-                st.caption(f"近 30 天相关新闻：{s.heat} 条")
                 for e in s.errors:
                     st.caption(f":orange[{e}]")
                 if s.headlines:
@@ -399,7 +429,6 @@ def page_ipo() -> None:
                 settings["watchlist"] = [ln.strip() for ln in text.splitlines() if ln.strip()]
                 if not DEMO:
                     appstate.save_settings(settings)
-                st.cache_data.clear()
                 st.rerun()
         st.caption("进度阶段：传闻 → 上市辅导 → 交易所受理 → 问询 / 上市委审议 → 注册 → 发行上市。"
                    "交易所和巨潮资讯是官方数据；带『据新闻』的还没有官方证实。")
@@ -416,7 +445,7 @@ def page_ipo() -> None:
             st.dataframe(pd.DataFrame({"公告日": subs["date"], "代码": subs["code"], "名称": subs["name"],
                                        "板块": subs["board"], "公告": subs["title"], "原文": subs["url"]}),
                          hide_index=True, column_config={"原文": st.column_config.LinkColumn(display_text="PDF")})
-            st.caption("发行公告发布后的下一个交易日一般是申购日，具体以公告为准。")
+            st.caption("发行公告发布后的下一个交易日一般是申购日，具体以公告为准。来源：巨潮资讯网。")
 
     with tab3:
         listings, err = get_listings()
@@ -426,26 +455,51 @@ def page_ipo() -> None:
             st.info("最近半年没有新股上市公告。")
         else:
             px = get_listing_prices(tuple(data.to_yahoo(c) for c in listings["code"]))
+            rows = []
             for _, r in listings.iterrows():
                 sym = data.to_yahoo(r["code"])
-                closes = px[sym] if sym in px.columns else None
-                adv = ipo.post_listing_advice(r["date"], closes)
-                last = (f"，最新价 ¥{closes.dropna().iloc[-1]:.2f}"
-                        if closes is not None and closes.notna().any() else "")
-                show_alert(alerts.Alert(adv.level, f"{r['name']}（{r['code']}，{r['board']}）",
-                                        f"约 {r['date']:%Y-%m-%d} 上市{last}。{adv.text}"))
+                closes = px[sym].dropna() if sym in px.columns else pd.Series(dtype=float)
+                adv = ipo.post_listing_advice(r["date"], closes if len(closes) else None)
+                first, last = (float(closes.iloc[0]), float(closes.iloc[-1])) if len(closes) else (None, None)
+                rows.append({"上市日（约）": r["date"], "代码": r["code"], "名称": r["name"], "板块": r["board"],
+                             "最新价": last,
+                             "相对首日收盘": (last / first - 1) * 100 if first else None,
+                             "建议": ADVICE[adv.level], "说明": adv.text, "公告": r["url"]})
+            df = pd.DataFrame(rows)
+            c = st.columns(3)
+            for col, level in zip(c, ("ok", "info", "warn")):
+                col.metric(ADVICE[level], f"{(df['建议'] == ADVICE[level]).sum()} 只", border=True)
+            priced = df.dropna(subset=["相对首日收盘"]).head(25)
+            if not priced.empty:
+                chart = priced.assign(标签=priced["代码"] + "　" + priced["名称"], 涨跌=priced["相对首日收盘"] / 100)
+                ui.hbar(chart, "标签", "涨跌", "最近上市的新股：最新价相对上市首日收盘价", fmt="+.0%",
+                        sign_labels=("高于首日收盘", "低于首日收盘"))
+            choice = st.radio("筛选", ["全部"] + list(ADVICE.values()), horizontal=True,
+                              label_visibility="collapsed")
+            st.dataframe(df if choice == "全部" else df[df["建议"] == choice], hide_index=True, column_config={
+                "最新价": st.column_config.NumberColumn(format="¥%.2f"),
+                "相对首日收盘": st.column_config.NumberColumn(format="%+.0f%%"),
+                "说明": st.column_config.TextColumn(width="large"),
+                "公告": st.column_config.LinkColumn(display_text="PDF"),
+            })
             st.caption("规则：新股前 5 个交易日没有涨跌幅限制；上市满 6 个月和 12 个月有股份解禁。"
-                       "解禁日期是估算，准确日期以公告为准。")
+                       "上市日和解禁日期是按公告日估算的，准确日期以公告为准。北交所股票暂无行情。")
 
     with tab4:
         projects, err = get_recent_projects()
         if projects is None:
             st.warning(f"深交所审核信息暂时无法获取。（{err}）")
         else:
-            st.markdown("深交所（创业板、深市主板）最近更新的 IPO 项目：")
+            order = ["已受理", "已问询", "上市委会议通过", "提交注册", "注册生效"]
+            counts = pd.Series([p.status for p in projects]).value_counts()
+            counts = counts.reindex([s for s in order if s in counts.index] +
+                                    [s for s in counts.index if s not in order])
+            ui.hbar(counts.rename_axis("状态").reset_index(name="家数"), "状态", "家数",
+                    "深交所最近更新的 IPO 项目（按审核状态）")
             st.dataframe(pd.DataFrame([{"更新日期": p.updated, "公司": p.company, "状态": p.status,
                                         "行业": p.industry, "保荐机构": p.sponsor,
                                         "计划募资（亿元）": p.amount_yi} for p in projects]), hide_index=True)
+            st.caption("来源：深圳证券交易所发行上市审核信息公开网站（创业板、深市主板）。")
     st.caption(SOURCES)
 
 

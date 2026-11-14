@@ -62,11 +62,12 @@ def market():
 @step("Current picks (with Yahoo PE check and lot sizes)")
 def picks():
     p = Params(top_n=20)
-    cands = list(screener.candidates(market, p).index)
+    cands = screener.candidates(market, p)
     f = data.fundamentals(cands)
     print("fundamentals:", f["pe"].notna().sum(), "of", len(f), "have PE; loss-makers:", int((f["pe"] <= 0).sum()))
     prices = data.latest_prices(cands)
     pk = screener.current_picks(market, p, 200_000, f, prices)
+    print("changes: +", pk.added, "-", pk.removed, "data to", pk.data_date.date())
     print("as of", pk.as_of.date(), "market ok", pk.market_ok, f"CSI300 ETF vs 200d {pk.market_vs_sma:+.1%}",
           "next", pk.next_rebalance.date())
     print(pk.table[["code", "name", "board", "reversal", "abnormal_turnover", "volatility", "pe", "price",
@@ -154,7 +155,7 @@ def watch():
 
 @step("Post-listing advice with real prices", core=False)
 def advice():
-    syms = [data.to_yahoo(c) for c in cninfo["code"]][:10]
+    syms = [y for y in (data.to_yahoo(c) for c in cninfo["code"]) if y][:10]
     close, _ = data.download(syms, (date.today() - timedelta(days=400)).isoformat())
     for _, r in cninfo.head(10).iterrows():
         sym = data.to_yahoo(r["code"])

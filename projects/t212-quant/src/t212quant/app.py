@@ -15,19 +15,17 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # run as a script without install
 
-import altair as alt  # noqa: E402
 import pandas as pd  # noqa: E402
 import streamlit as st  # noqa: E402
 
 from t212quant import (  # noqa: E402
-    alerts, appstate, backtest, data, demo, ipo, metrics, news, rebalance, research, screener,
+    alerts, appstate, backtest, data, demo, ipo, metrics, news, rebalance, research, screener, ui,
 )
 from t212quant.broker import Trading212Client  # noqa: E402
 from t212quant.config import load_config  # noqa: E402
 from t212quant.strategy import compute_signal  # noqa: E402
 
 DEMO = os.getenv("T212Q_DEMO") == "1"
-COLORS = ["#2a78d6", "#eb6834", "#1baf7a"]  # categorical slots 1-3 of the data-viz palette
 SCREEN_START = "2010-01-01"
 PLAN_MAX_AGE_S = 15 * 60  # an order plan older than this must be regenerated
 ICONS = {"warn": ":material/warning:", "ok": ":material/check_circle:", "info": ":material/info:"}
@@ -39,6 +37,8 @@ appstate.load_env_file()
 settings = appstate.load_settings()
 if DEMO:
     settings["watchlist"] = demo.WATCHLIST
+ui.inject_css()
+ui.brand("量化助手", "美股 · Trading 212")
 
 
 # -- data (cached) ---------------------------------------------------------------
@@ -145,6 +145,12 @@ def get_etf():
 
 # -- small UI helpers ----------------------------------------------------------------
 
+STOCK_LABELS = {"Strategy": "量化选股", "S&P 500 (SPY)": "标普 500",
+                "All stocks, equal weight": "全部股票平均持有"}
+IPO_STEPS = ["有报道", "准备上市", "秘密递交", "公开递交", "路演定价", "已上市"]
+ADVICE = {"ok": "✓ 可关注", "info": "… 观察", "warn": "✕ 回避"}
+
+
 def md(text: str) -> str:
     """Escape `$` so Streamlit doesn't render dollar amounts as maths."""
     return str(text).replace("$", "\\$")
@@ -155,32 +161,6 @@ def show_alert(a: alerts.Alert) -> None:
     box(f"**{md(a.area)}**　{md(a.text)}", icon=ICONS[a.level])
 
 
-def growth_chart(results: dict, labels: dict[str, str]) -> alt.LayerChart:
-    order = [labels[k] for k in results]
-    df = pd.concat([
-        pd.DataFrame({"日期": r.nav.resample("W").last().index, "组合": labels[k],
-                      "净值": r.nav.resample("W").last().to_numpy()})
-        for k, r in results.items()
-    ])
-    color = alt.Color("组合:N", scale=alt.Scale(domain=order, range=COLORS[: len(order)]),
-                      legend=alt.Legend(orient="top", title=None))
-    base = alt.Chart(df).encode(
-        x=alt.X("日期:T", title=None),
-        y=alt.Y("净值:Q", scale=alt.Scale(type="log"), title="1 份本金变成多少（对数坐标）"),
-        color=color,
-    )
-    hover = alt.selection_point(fields=["日期"], nearest=True, on="pointerover", empty=False)
-    rule = (alt.Chart(df).transform_pivot("组合", value="净值", groupby=["日期"])
-            .mark_rule(color="#8a8a8a")
-            .encode(x="日期:T", opacity=alt.condition(hover, alt.value(0.5), alt.value(0)),
-                    tooltip=[alt.Tooltip("日期:T", title="日期")]
-                    + [alt.Tooltip(f"{n}:Q", format=".2f") for n in order])
-            .add_params(hover))
-    points = base.mark_point(size=70, filled=True).encode(
-        opacity=alt.condition(hover, alt.value(1), alt.value(0)))
-    return alt.layer(base.mark_line(strokeWidth=2), points, rule).properties(height=380)
-
-
 def etf_labels(cfg) -> dict[str, str]:
     names = {"Buy & hold VWRL": "一直持有 VWRL（全球股票）", "60/40 VWRL/IGLT": "60/40 股债组合"}
     return {b.name: names.get(b.name, b.name) for b in cfg.benchmarks}
@@ -189,7 +169,6 @@ def etf_labels(cfg) -> dict[str, str]:
 def verdict(results: dict, labels: dict[str, str], strategy: str = "Strategy") -> str:
     """One honest sentence per benchmark: did the strategy earn more, and lose less?"""
     s = metrics.summary(results[strategy].nav)
-    years = s["Years"]
     parts = []
     for k, r in results.items():
         if k == strategy:
@@ -199,13 +178,32 @@ def verdict(results: dict, labels: dict[str, str], strategy: str = "Strategy") -
         safer = "更小" if s["Max drawdown"] > b["Max drawdown"] else "更大"
         parts.append(f"比『{labels[k]}』：年化收益{more}（{s['CAGR']:+.1%} 对 {b['CAGR']:+.1%}），"
                      f"最大回撤{safer}（{s['Max drawdown']:.0%} 对 {b['Max drawdown']:.0%}）")
-    return f"过去 {years:.0f} 年的回测结论：" + "；".join(parts) + "。"
+    return f"过去 {s['Years']:.0f} 年的回测结论：" + "；".join(parts) + "。"
+
+
+def headline_tiles(results: dict, labels: dict[str, str], unit: str, strategy: str = "Strategy") -> None:
+    """The strategy's key numbers, each compared with the first benchmark."""
+    bench = next(k for k in results if k != strategy)
+    s, b = metrics.summary(results[strategy].nav), metrics.summary(results[bench].nav)
+    worst = metrics.calendar_returns(results[strategy].nav).min()
+    name = labels[bench]
+    c = st.columns(4)
+    c[0].metric("年化收益", f"{s['CAGR']:+.1%}", f"{(s['CAGR'] - b['CAGR']) * 100:+.1f} 个百分点", border=True)
+    c[1].metric("最大回撤（最多亏过）", f"{s['Max drawdown']:.0%}",
+                f"{(s['Max drawdown'] - b['Max drawdown']) * 100:+.0f} 个百分点", border=True)
+    c[2].metric("最差的一年", f"{worst:+.1%}", border=True)
+    c[3].metric(f"1 万{unit}变成", f"{10_000 * results[strategy].nav.iloc[-1]:,.0f}", border=True)
+    st.caption(f"小字是和『{name}』相比的差距（{name}：年化 {b['CAGR']:+.1%}，最大回撤 {b['Max drawdown']:.0%}，"
+               f"1 万{unit}变成 {10_000 * results[bench].nav.iloc[-1]:,.0f}）。")
 
 
 def show_backtest(results: dict, labels: dict[str, str], unit: str, strategy: str = "Strategy") -> None:
     st.info(md(verdict(results, labels, strategy)), icon=ICONS["info"])
-    st.altair_chart(growth_chart(results, labels))
-    st.table(summary_table(results, labels, unit))
+    headline_tiles(results, labels, unit, strategy)
+    ui.performance_charts(results, labels)
+    ui.yearly_chart(results, labels, metrics.calendar_returns)
+    with st.expander("详细数字"):
+        st.table(summary_table(results, labels, unit))
 
 
 def summary_table(results: dict, labels: dict[str, str], unit: str) -> pd.DataFrame:
@@ -216,6 +214,8 @@ def summary_table(results: dict, labels: dict[str, str], unit: str) -> pd.DataFr
         rows[labels[k]] = {
             f"本金 1 万{unit}变成": f"{10_000 * r.nav.iloc[-1]:,.0f}",
             "年化收益": f"{s['CAGR']:+.1%}",
+            "年化波动": f"{s['Volatility']:.1%}",
+            "夏普比率": f"{s['Sharpe']:.2f}",
             "最大回撤（最多亏过）": f"{s['Max drawdown']:.1%}",
             "最差的一年": f"{cal.min():+.1%}" if len(cal) else "-",
         }
@@ -231,6 +231,10 @@ def loading(msg: str = "正在下载最新数据……第一次打开需要 1–
     return st.spinner(msg)
 
 
+def stock_settings() -> tuple[int, bool]:
+    return int(settings["top_n"]), bool(settings["regime_filter"])
+
+
 # -- pages ----------------------------------------------------------------------------
 
 def page_overview() -> None:
@@ -240,10 +244,11 @@ def page_overview() -> None:
     today = date.today()
     history = appstate.load_history()
     items: list[alerts.Alert] = []
+    top_n, regime = stock_settings()
 
     with loading():
         try:
-            picks = get_picks(int(settings["top_n"]), bool(settings["regime_filter"]))
+            picks = get_picks(top_n, regime)
         except Exception as exc:
             picks = None
             st.error(f"股票数据暂时无法下载，请检查网络后刷新页面。（{exc}）")
@@ -252,15 +257,17 @@ def page_overview() -> None:
 
     cols = st.columns(4)
     if picks is not None:
-        month = f"{today:%Y-%m}"
-        symbols = list(picks.table["symbol"]) if picks.market_ok else []
-        appstate.record_picks(history, month, symbols)
-        items.append(alerts.market(picks.market_vs_sma, bool(settings["regime_filter"])))
-        items += alerts.picks(symbols, history, month, today, picks.market_ok)
-        cols[0].metric("美股大盘趋势", "向上" if picks.market_vs_sma > 0 else "向下",
-                       f"{picks.market_vs_sma:+.1%} 相对 200 日均线", border=True)
-        cols[1].metric("A 类本月持股", f"{len(symbols)} 只" if symbols else "持有现金", border=True)
-        cols[3].metric("下次调仓日", f"{picks.next_rebalance:%m 月 %d 日}", border=True)
+        held = len(picks.table) if picks.market_ok else 0
+        items.append(alerts.market(picks.market_vs_sma, regime))
+        items += alerts.picks(picks.added, picks.removed, today, picks.market_ok)
+        spy = get_stock_prices(tuple(get_universe().symbols))[screener.MARKET].dropna().iloc[-250:]
+        cols[0].metric("标普 500（对比 200 日均线）", "向上" if picks.market_vs_sma > 0 else "向下",
+                       f"{picks.market_vs_sma:+.1%}", border=True, height="stretch",
+                       chart_data=spy.round(2).tolist(), chart_type="line")
+        cols[1].metric("A 类本月持股", f"{held} 只" if held else "持有现金",
+                       f"买入 {len(picks.added)} · 卖出 {len(picks.removed)}", delta_color="off",
+                       delta_arrow="off", border=True, height="stretch")
+        cols[3].metric("下次调仓日", f"{picks.next_rebalance:%m 月 %d 日}", border=True, height="stretch")
     for s in statuses:
         appstate.record_stage(history, s.name, s.stage, today)
     items += alerts.watchlist(statuses, history, today)
@@ -272,8 +279,8 @@ def page_overview() -> None:
     items += alerts.etf(today, rebalance.already_traded_this_month("live", rebalance.DEFAULT_JOURNAL))
     appstate.save_history(history)
     cols[2].metric("B 类关注公司", f"{len(statuses)} 家",
-                   f"最高进度：{max((s.stage for s in statuses), default=0)}/6", border=True,
-                   delta_color="off")
+                   f"最高进度 {max((s.stage for s in statuses), default=0)}/6", border=True,
+                   delta_color="off", delta_arrow="off", height="stretch")
 
     st.subheader("提醒")
     if not items:
@@ -281,17 +288,19 @@ def page_overview() -> None:
     for a in alerts.sort(items):
         show_alert(a)
 
-    st.subheader("策略体检（用真实历史数据回测）")
+    st.subheader("策略体检")
+    st.caption("用真实历史数据回测。回测不代表未来；所有策略都可能连续一两年跑输简单持有指数。")
     try:
-        res = get_screen_backtest(int(settings["top_n"]), bool(settings["regime_filter"]))
-        st.caption("A 类 · 量化选股：" + md(verdict(res, {"Strategy": "量化选股", "S&P 500 (SPY)": "标普 500",
-                                                          "All stocks, equal weight": "全部股票平均持有"})))
-        cfg, _, _, etf_res = get_etf()
-        st.caption("ETF 轮动：" + md(verdict(etf_res, {"Strategy": "ETF 轮动",
-                                                       **etf_labels(cfg)})))
+        left, right = st.columns(2)
+        with left.container(border=True):
+            st.markdown("**A 类 · 量化选股**")
+            _health(get_screen_backtest(top_n, regime), STOCK_LABELS)
+        with right.container(border=True):
+            cfg, _, _, etf_res = get_etf()
+            st.markdown("**ETF 轮动**")
+            _health(etf_res, {"Strategy": "ETF 轮动", **etf_labels(cfg)})
     except Exception as exc:
         st.caption(f"回测暂时无法计算：{exc}")
-    st.caption("回测不代表未来；所有策略都可能连续一两年跑输简单持有指数。")
 
     with st.container(border=True):
         st.markdown(
@@ -300,6 +309,17 @@ def page_overview() -> None:
             "2. 看一眼『B 类新股』有没有新提醒。\n"
             "3. 平时不用盯盘。"
         )
+
+
+def _health(results: dict, labels: dict[str, str]) -> None:
+    bench = next(k for k in results if k != "Strategy")
+    s, b = metrics.summary(results["Strategy"].nav), metrics.summary(results[bench].nav)
+    c1, c2 = st.columns(2)
+    c1.metric("年化收益", f"{s['CAGR']:+.1%}", f"{(s['CAGR'] - b['CAGR']) * 100:+.1f} 个百分点")
+    c2.metric("最大回撤", f"{s['Max drawdown']:.0%}",
+              f"{(s['Max drawdown'] - b['Max drawdown']) * 100:+.0f} 个百分点")
+    st.caption(f"对比『{labels[bench]}』（年化 {b['CAGR']:+.1%}，最大回撤 {b['Max drawdown']:.0%}），"
+               f"回测 {s['Years']:.0f} 年。")
 
 
 def page_stocks() -> None:
@@ -323,51 +343,61 @@ def page_stocks() -> None:
     with loading():
         try:
             picks = get_picks(top_n, regime)
+            prices = get_stock_prices(tuple(get_universe().symbols))
         except Exception as exc:
             st.error(f"股票数据暂时无法下载，请检查网络后刷新页面。（{exc}）")
             return
-    universe = get_universe()
-    st.caption(f"股票池：{universe.source}　·　数据截至 {picks.as_of:%Y-%m-%d} 收盘")
-
-    if picks.market_ok:
-        st.success(f"大盘趋势向上（标普 500 比 200 日均线 {picks.market_vs_sma:+.1%}）："
-                   f"本月买入下面 {top_n} 只，每只约 £{capital / top_n:,.0f}。", icon=ICONS["ok"])
-    else:
-        st.warning(f"大盘跌破 200 日均线（{picks.market_vs_sma:+.1%}）：本月**不买股票**，"
-                   "把这部分钱留作现金。下面的名单仅供参考。", icon=ICONS["warn"])
-
     t = picks.table
-    if picks.market_ok and len(t) < top_n:
-        st.info(f"本月只有 {len(t)} 只股票符合条件，剩下的 £{capital * (1 - len(t) / top_n):,.0f} "
-                "留作现金。", icon=ICONS["info"])
+    st.caption(f"股票池：{get_universe().source}　·　名单按 {picks.as_of:%Y-%m-%d} 收盘计算，本月内不变　·　"
+               f"行情截至 {picks.data_date:%Y-%m-%d}")
+
+    if not picks.market_ok:
+        st.warning("你开启了大盘过滤，标普 500 在月底时低于 200 日均线：本月**不买股票**，"
+                   "把这部分钱留作现金。下面的名单仅供参考。", icon=ICONS["warn"])
+    else:
+        trend = (f"标普 500 比 200 日均线高 {picks.market_vs_sma:.1%}" if picks.market_vs_sma > 0
+                 else f"注意：标普 500 比 200 日均线低 {-picks.market_vs_sma:.1%}，大盘偏弱")
+        st.success(f"本月买入下面 {len(t)} 只，每只约 £{capital / top_n:,.0f}。{trend}。", icon=ICONS["ok"])
+        if picks.added or picks.removed:
+            st.info(f"相比上月名单　买入：{'、'.join(picks.added) or '无'}　｜　卖出：{'、'.join(picks.removed) or '无'}",
+                    icon=":material/swap_horiz:")
+        if len(t) < top_n:
+            st.info(f"本月只有 {len(t)} 只股票符合条件，剩下的 £{capital * (1 - len(t) / top_n):,.0f} 留作现金。",
+                    icon=ICONS["info"])
+
     with loading("正在获取公司基本面……"):
         f = get_fundamentals(tuple(t["symbol"]))
-    amount = capital / top_n if picks.market_ok else 0.0
+    sectors = [f["sector"].get(s) or sec or "未知" for s, sec in zip(t["symbol"], t["sector"])]
     table = pd.DataFrame({
         "排名": range(1, len(t) + 1),
         "代码": t["symbol"],
         "公司": [f["name"].get(s) or n for s, n in zip(t["symbol"], t["name"])],
-        "行业": [f["sector"].get(s) or sec for s, sec in zip(t["symbol"], t["sector"])],
+        "行业": sectors,
+        "半年走势": ui.sparkline_rows(prices, list(t["symbol"])),
         "近 12 个月涨幅": t["momentum"] * 100,
         "年化波动": t["vol"] * 100,
-        "高于 200 日均线": t["vs_sma"] * 100,
-        "建议买入 £": amount,
+        "建议买入": capital / top_n if picks.market_ok else 0.0,
         "预期市盈率": [f["forward_pe"].get(s) for s in t["symbol"]],
         "提示": ["；".join(screener.warnings_for(f.loc[s])) if s in f.index else ""
                for s in t["symbol"]],
     })
-    st.dataframe(table, hide_index=True, column_config={
+    st.dataframe(table, hide_index=True, height=35 * (len(table) + 1) + 3, column_config={
+        "排名": st.column_config.NumberColumn(width="small"),
         "公司": st.column_config.TextColumn(width="medium"),
-        "近 12 个月涨幅": st.column_config.NumberColumn(format="%.1f%%",
-                                                   help="12 个月前到 1 个月前的涨幅"),
-        "年化波动": st.column_config.NumberColumn(format="%.1f%%", help="越低越稳"),
-        "高于 200 日均线": st.column_config.NumberColumn(format="%.1f%%"),
-        "建议买入 £": st.column_config.NumberColumn(format="£%.0f"),
+        "半年走势": st.column_config.LineChartColumn(width="small", help="最近约 6 个月的股价走势"),
+        "近 12 个月涨幅": st.column_config.NumberColumn(format="%.0f%%", help="12 个月前到 1 个月前的涨幅"),
+        "年化波动": st.column_config.NumberColumn(format="%.0f%%", help="越低越稳"),
+        "建议买入": st.column_config.NumberColumn(format="£%.0f"),
         "预期市盈率": st.column_config.NumberColumn(format="%.1f"),
-        "提示": st.column_config.TextColumn(width="large"),
     })
 
-    with st.container(border=True):
+    left, right = st.columns([1, 1])
+    with left:
+        counts = pd.Series(sectors).value_counts().rename_axis("行业").reset_index(name="只数")
+        ui.hbar(counts, "行业", "只数", "行业分布（只数）")
+        if len(counts) and counts["只数"].iloc[0] > len(t) / 2:
+            st.caption(f"提示：超过一半集中在『{counts['行业'].iloc[0]}』，行业风险较集中。")
+    with right.container(border=True):
         st.markdown(
             "**在 Trading 212 里怎么操作**\n"
             "1. 打开 Trading 212 App，搜索上表的代码（例如 NVDA）。\n"
@@ -380,9 +410,7 @@ def page_stocks() -> None:
     with tab1:
         with loading("正在回测过去十几年的表现……"):
             res = get_screen_backtest(top_n, regime)
-        labels = {"Strategy": "量化选股", "S&P 500 (SPY)": "标普 500",
-                  "All stocks, equal weight": "全部股票平均持有"}
-        show_backtest(res, labels, "美元")
+        show_backtest(res, STOCK_LABELS, "美元")
         st.caption("回测按美元计算，含每笔 0.25% 成本。注意：回测用的是今天的成分股，过去被踢出指数的"
                    "失败公司不在里面，所以三条线都被高估，选股策略高估得最多。过去表现不代表未来。")
     with tab2:
@@ -416,15 +444,20 @@ def page_ipo() -> None:
     with tab1:
         with loading("正在搜索新闻和 SEC 文件……"):
             statuses = [get_watch(e, settings["sec_contact"]) for e in settings["watchlist"]]
+        shared = sorted({e for s in statuses for e in s.errors})
+        for e in shared:
+            st.caption(f":orange[{e}]")
         for s in statuses:
             with st.container(border=True):
-                st.subheader(s.name)
-                st.progress(s.stage / 6, text=f"上市进度：**{s.label}**（{s.stage}/6）")
+                head, badge = st.columns([4, 1])
+                head.subheader(s.name)
+                if s.stage:
+                    badge.badge("官方数据" if s.official else "据新闻", color="blue" if s.official else "gray",
+                                icon=":material/verified:" if s.official else ":material/newspaper:")
+                ui.stepper(s.stage, IPO_STEPS, s.official)
+                st.markdown(f"**{s.label}**" + (f"　·　近 30 天相关新闻 {s.heat} 条" if s.heat else ""))
                 if s.evidence:
                     st.caption(f"依据：{md(s.evidence)}")
-                st.caption(f"近 30 天 IPO 相关新闻：{s.heat} 条")
-                for e in s.errors:
-                    st.caption(f":orange[{e}]")
                 if s.filings:
                     st.markdown("**SEC 上市申请文件**")
                     for fl in s.filings[:5]:
@@ -439,7 +472,8 @@ def page_ipo() -> None:
                                 value="\n".join(settings["watchlist"]), height=150)
             if st.button("保存名单"):
                 settings["watchlist"] = [ln.strip() for ln in text.splitlines() if ln.strip()]
-                appstate.save_settings(settings)
+                if not DEMO:
+                    appstate.save_settings(settings)
                 st.rerun()
         st.caption("进度是根据公开新闻和官方数据自动判断的，带『据新闻』的还没有官方证实。"
                    "Trading 212 一般不提供新股认购，只能在上市后买入。")
@@ -452,12 +486,13 @@ def page_ipo() -> None:
             up = ipo.upcoming_ipos(calendar, days=30)
             st.subheader("即将上市")
             if up.empty:
-                st.info("未来 30 天没有已公布的 IPO。")
+                st.info("未来 30 天没有已公布定价日的 IPO。")
             else:
                 st.dataframe(_ipo_table(up, "预计定价日"), hide_index=True)
             recent = calendar[calendar["status"] == "priced"].head(25)
             st.subheader("最近上市")
             st.dataframe(_ipo_table(recent, "上市日"), hide_index=True)
+            st.caption("来源：Nasdaq 官网 IPO 日历。")
 
     with tab3:
         if calendar is None:
@@ -469,14 +504,37 @@ def page_ipo() -> None:
             return
         with loading("正在获取新股价格……"):
             px = get_ipo_prices(tuple(recent["symbol"]))
+        rows = []
         for _, r in recent.iterrows():
-            closes = px[r["symbol"]] if r["symbol"] in px.columns else None
-            adv = ipo.post_ipo_advice(r["date"], r["ipo_price"], closes)
-            last = f"，现价 ${closes.dropna().iloc[-1]:.2f}" if closes is not None and closes.notna().any() else ""
-            show_alert(alerts.Alert(adv.level, f"{r['company']}（{r['symbol']}）",
-                                    f"{r['date']:%Y-%m-%d} 以 ${r['ipo_price']:.2f} 上市{last}。{adv.text}"))
-        st.caption("规则依据：新股长期平均跑输大盘（Ritter 1991）；锁定期（通常约 180 天）到期前后"
-                   "股价平均偏弱（Field & Hanka 2001）。锁定期是估算，准确日期以招股书为准。")
+            closes = px[r["symbol"]].dropna() if r["symbol"] in px.columns else pd.Series(dtype=float)
+            adv = ipo.post_ipo_advice(r["date"], r["ipo_price"], closes if len(closes) else None)
+            last = float(closes.iloc[-1]) if len(closes) else None
+            rows.append({"上市日": r["date"], "代码": r["symbol"], "公司": r["company"],
+                         "发行价": r["ipo_price"], "现价": last,
+                         "相对发行价": (last / r["ipo_price"] - 1) * 100 if last and r["ipo_price"] else None,
+                         "建议": ADVICE[adv.level], "说明": adv.text})
+        df = pd.DataFrame(rows)
+        c = st.columns(3)
+        for col, level in zip(c, ("ok", "info", "warn")):
+            col.metric(ADVICE[level], f"{(df['建议'] == ADVICE[level]).sum()} 只", border=True)
+        priced = df.dropna(subset=["相对发行价"]).head(25)
+        if not priced.empty:
+            chart = priced.assign(名称=priced["代码"] + "　" + priced["公司"].str.slice(0, 22),
+                                  涨跌=priced["相对发行价"] / 100)
+            ui.hbar(chart, "名称", "涨跌", "最近上市的新股：现价相对发行价", fmt="+.0%",
+                    sign_labels=("高于发行价", "低于发行价"))
+        choice = st.radio("筛选", ["全部"] + list(ADVICE.values()), horizontal=True, label_visibility="collapsed")
+        shown = df if choice == "全部" else df[df["建议"] == choice]
+        st.dataframe(shown, hide_index=True, column_config={
+            "发行价": st.column_config.NumberColumn(format="$%.2f"),
+            "现价": st.column_config.NumberColumn(format="$%.2f"),
+            "相对发行价": st.column_config.NumberColumn(format="%+.0f%%"),
+            "公司": st.column_config.TextColumn(width="medium"),
+            "说明": st.column_config.TextColumn(width="large"),
+        })
+        st.caption("只列出过去一年募资 5000 万美元以上的公司，不含 SPAC。规则依据：新股长期平均跑输大盘"
+                   "（Ritter 1991）；锁定期（通常约 180 天）到期前后股价平均偏弱（Field & Hanka 2001）。"
+                   "锁定期是估算，准确日期以招股书为准。")
 
 
 def _ipo_table(df: pd.DataFrame, date_label: str) -> pd.DataFrame:
@@ -502,14 +560,11 @@ def page_etf() -> None:
 
     st.subheader(f"本月目标持仓（截至 {sig.as_of:%Y-%m-%d}）")
     held = sig.weights[sig.weights > 0].sort_values(ascending=False)
-    st.dataframe(pd.DataFrame({
-        "ETF": held.index, "名称": [cfg.asset(s).name for s in held.index],
-        "目标仓位": held.values * 100,
-    }), hide_index=True, column_config={"目标仓位": st.column_config.NumberColumn(format="%.1f%%")})
+    ui.hbar(pd.DataFrame({"ETF": [f"{s.replace('.L', '')}　{cfg.asset(s).name}" for s in held.index],
+                          "仓位": held.to_numpy()}), "ETF", "仓位", "目标仓位", fmt=".0%", height_per_row=34)
 
     with st.expander("历史回测", expanded=True):
-        labels = {"Strategy": "ETF 轮动", **etf_labels(cfg)}
-        show_backtest(res, labels, "英镑")
+        show_backtest(res, {"Strategy": "ETF 轮动", **etf_labels(cfg)}, "英镑")
 
     st.subheader("连接 Trading 212 调仓")
     env_label = st.radio("账户", ["模拟账户（Practice）", "真实账户（Live）"], horizontal=True)
@@ -557,29 +612,35 @@ def page_etf() -> None:
         del st.session_state["etf_plan"]
 
 
+SECRET_FIELDS = [
+    ("T212_API_KEY_DEMO", "模拟账户 API key"), ("T212_API_SECRET_DEMO", "模拟账户 API secret"),
+    ("T212_API_KEY_LIVE", "真实账户 API key"), ("T212_API_SECRET_LIVE", "真实账户 API secret"),
+]
+
+
 def page_account() -> None:
     st.title("账户与设置")
     env_values = appstate.read_env_file()
-    with st.form("keys"):
+    with st.form("keys", clear_on_submit=True):
         st.markdown("**Trading 212 API key**　在 Trading 212 App → 设置 → API (Beta) 生成。"
                     "先用模拟账户（Practice）的 key 练习。")
-        c1, c2 = st.columns(2)
-        demo_key = c1.text_input("模拟账户 API key", env_values.get("T212_API_KEY_DEMO", ""), type="password")
-        demo_secret = c2.text_input("模拟账户 API secret", env_values.get("T212_API_SECRET_DEMO", ""),
-                                    type="password")
-        live_key = c1.text_input("真实账户 API key", env_values.get("T212_API_KEY_LIVE", ""), type="password")
-        live_secret = c2.text_input("真实账户 API secret", env_values.get("T212_API_SECRET_LIVE", ""),
-                                    type="password")
+        cols = st.columns(2)
+        entered = {}
+        for i, (key, label) in enumerate(SECRET_FIELDS):
+            saved = bool(env_values.get(key))
+            # A saved key is never sent back to the browser: leave the box empty to keep it.
+            entered[key] = cols[i % 2].text_input(
+                label, type="password", placeholder="已保存；留空表示不修改" if saved else "还没有填写")
         allow_live = st.checkbox("允许真实账户下单（不勾选时只能看，不能下单）",
                                  value=env_values.get("T212_ALLOW_LIVE") == "yes")
         contact = st.text_input("联系邮箱（可选，SEC 要求查询者提供，用于 B 类新股数据）",
                                 settings.get("sec_contact", ""))
+        clear = st.checkbox("清除所有已保存的 API key")
         if st.form_submit_button("保存", type="primary"):
-            appstate.save_env_values({
-                "T212_API_KEY_DEMO": demo_key.strip(), "T212_API_SECRET_DEMO": demo_secret.strip(),
-                "T212_API_KEY_LIVE": live_key.strip(), "T212_API_SECRET_LIVE": live_secret.strip(),
-                "T212_ALLOW_LIVE": "yes" if allow_live else "no",
-            })
+            updates = {k: "" for k, _ in SECRET_FIELDS} if clear else \
+                {k: v.strip() for k, v in entered.items() if v.strip()}
+            updates["T212_ALLOW_LIVE"] = "yes" if allow_live and not clear else "no"
+            appstate.save_env_values(updates)
             settings["sec_contact"] = contact.strip()
             appstate.save_settings(settings)
             st.success("已保存在本机的 .env 文件里（不会上传）。")
@@ -624,6 +685,7 @@ def page_help() -> None:
 **A 类的原理**（量化基金几十年来最常用的『动量』因子）
 - 过去一年涨得好、而且涨得稳的股票，接下来几个月更可能继续涨。
 - 只买股价在 200 日均线之上的股票。
+- 名单按上个月最后一个交易日的收盘数据计算，一个月内固定不变，和回测的做法一致。
 - 可选的『大盘过滤』：标普 500 跌破 200 日均线时全部换成现金。用 2011–2026 年真实数据回测，它让最大回撤从约 -45% 降到约 -38%，但每年收益少了 6–10 个百分点，所以默认关闭，想更稳可以打开。
 
 **B 类的原理**

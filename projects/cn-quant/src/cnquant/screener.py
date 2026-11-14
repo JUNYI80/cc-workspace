@@ -47,10 +47,13 @@ def lot_size(code: str, price: float, amount: float) -> tuple[int, float]:
 
 @dataclass
 class Picks:
-    as_of: pd.Timestamp
-    market_ok: bool
-    market_vs_sma: float
+    as_of: pd.Timestamp  # 名单按这一天（上月最后一个交易日）的收盘数据计算
+    data_date: pd.Timestamp  # 行情数据的最新日期
+    market_ok: bool  # 只有开启大盘过滤且提示空仓时为 False
+    market_vs_sma: float  # 沪深 300 ETF 相对 200 日均线（最新）
     table: pd.DataFrame
+    added: list[str]  # 本月新进名单的股票（Yahoo 代码）
+    removed: list[str]
     next_rebalance: pd.Timestamp
 
 
@@ -60,40 +63,67 @@ def next_rebalance_day(today: pd.Timestamp) -> pd.Timestamp:
     return first + pd.offsets.BDay(0)
 
 
-def candidates(m: Market, p: Params) -> pd.DataFrame:
-    """今天总分最高的 3×N 只（还没做市盈率检查）。"""
+def decision_dates(index: pd.DatetimeIndex, today: pd.Timestamp | None = None) -> tuple[pd.Timestamp, pd.Timestamp | None]:
+    """上个月最后一个交易日，以及再上个月的最后一个交易日。
+
+    回测在每个月末收盘后决定、下一个交易日买卖；实际名单用同样的规则，所以一个月内固定不变。
+    """
+    today = pd.Timestamp(today or pd.Timestamp.today()).normalize()
+    before = index[index < today.replace(day=1)]
+    if before.empty:
+        return index[-1], None
+    last = before[-1]
+    earlier = index[index < last.replace(day=1)]
+    return last, (earlier[-1] if len(earlier) else None)
+
+
+def candidates(m: Market, p: Params, today: pd.Timestamp | None = None) -> list[str]:
+    """本月和上月两个决定日各自总分最高的 3×N 只（还没做市盈率检查），用来查基本面。"""
     panel = m.panel(p)
-    return scores_on(panel, m.close.index[-1], p.factor_weights).head(CANDIDATES * p.top_n)
+    out: list[str] = []
+    for d in decision_dates(m.close.index, today):
+        if d is not None:
+            out += list(scores_on(panel, d, p.factor_weights).head(CANDIDATES * p.top_n).index)
+    return list(dict.fromkeys(out))
+
+
+def _month_list(panel: Panel, date: pd.Timestamp, p: Params, pe: pd.Series) -> pd.DataFrame:
+    """某个决定日的名单：总分最高、且不亏损（市盈率为正；查不到市盈率的保留）的 N 只。"""
+    ranked = scores_on(panel, date, p.factor_weights).head(CANDIDATES * p.top_n)
+    keep = [s for s in ranked.index
+            if s not in pe.index or pd.isna(pe[s]) or (isinstance(pe[s], (int, float)) and pe[s] > 0)]
+    return ranked.loc[keep].head(p.top_n)
 
 
 def current_picks(m: Market, p: Params, capital: float, fundamentals: pd.DataFrame | None = None,
-                  prices: dict[str, float] | None = None) -> Picks:
-    """本月名单：总分最高、且最新市盈率为正（不亏损）的 N 只，并按手数算出买多少股。"""
+                  prices: dict[str, float] | None = None, today: pd.Timestamp | None = None) -> Picks:
+    """本月名单，并按手数算出每只买多少股。"""
     panel = m.panel(p)
-    date = m.close.index[-1]
-    ranked = scores_on(panel, date, p.factor_weights).head(CANDIDATES * p.top_n)
+    date, previous = decision_dates(m.close.index, today)
     f = fundamentals if fundamentals is not None else pd.DataFrame(columns=["pe", "margin", "sector"])
+    top = _month_list(panel, date, p, f["pe"])
+    before = set(_month_list(panel, previous, p, f["pe"]).index) if previous is not None else None
     names = m.names()
     market_ok = bool(panel.market_ok.loc[date])
     per_stock = capital / p.top_n if market_ok else 0.0
     rows = []
-    for sym, r in ranked.iterrows():
-        pe = f["pe"].get(sym) if sym in f.index else None
-        if pe is not None and not (isinstance(pe, (int, float)) and pe > 0):
-            continue  # 亏损（市盈率为负或没有）
+    for sym, r in top.iterrows():
         price = (prices or {}).get(sym, float("nan"))
         shares, cost = lot_size(sym, price, per_stock)
+        pe = f["pe"].get(sym) if sym in f.index else None
         rows.append({
             "code": sym[:6], "yahoo": sym, "name": names.get(sym, sym), "board": board(sym),
             "reversal": r["reversal"], "abnormal_turnover": r["abnormal_turnover"],
-            "volatility": r["volatility"], "score": r["score"], "pe": pe,
+            "volatility": r["volatility"], "score": r["score"], "pe": None if pd.isna(pe) else pe,
             "sector": f["sector"].get(sym) if sym in f.index else None,
             "price": price, "shares": shares, "cost": cost,
         })
-        if len(rows) == p.top_n:
-            break
-    return Picks(date, market_ok, float(panel.market_vs_sma.loc[date]), pd.DataFrame(rows),
-                 next_rebalance_day(date))
+    now = set(top.index)
+    return Picks(date, m.close.index[-1], market_ok, float(panel.market_vs_sma.iloc[-1]),
+                 pd.DataFrame(rows),
+                 sorted(now - before) if before is not None else [],
+                 sorted(before - now) if before is not None else [],
+                 next_rebalance_day(m.close.index[-1]))
 
 
 def run_backtest(m: Market, p: Params) -> dict[str, backtest.BacktestResult]:

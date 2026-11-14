@@ -33,23 +33,15 @@ def is_rebalance_window(today: date) -> bool:
     return pd.Timestamp(today) in weekdays
 
 
-def picks(current: list[str], history: dict, month: str, today: date,
-          market_ok: bool) -> list[Alert]:
+def picks(added: list[str], removed: list[str], today: date, market_ok: bool) -> list[Alert]:
+    """This month's changes to the list, and a nudge during the first three weekdays."""
     out = []
-    months = sorted(m for m in history.get("picks", {}) if m < month)
-    if months:
-        prev = set(history["picks"][months[-1]])
-        added, removed = sorted(set(current) - prev), sorted(prev - set(current))
-        if added or removed:
-            parts = []
-            if added:
-                parts.append("买入 " + "、".join(added))
-            if removed:
-                parts.append("卖出 " + "、".join(removed))
-            out.append(Alert("info", "A 类选股", f"本月持股有变化：{'；'.join(parts)}。"))
+    parts = ([f"买入 {'、'.join(added)}"] if added else []) + ([f"卖出 {'、'.join(removed)}"] if removed else [])
+    if parts and market_ok:
+        out.append(Alert("info", "A 类选股", f"本月名单相比上月：{'；'.join(parts)}。其余继续持有。"))
     if is_rebalance_window(today):
         action = "按『A 类选股』页面的名单调整持仓" if market_ok else "卖出 A 类股票，持有现金"
-        out.append(Alert("warn", "A 类选股", f"今天是本月调仓日：{action}。"))
+        out.append(Alert("warn", "A 类选股", f"现在是本月调仓时间：{action}。"))
     return out
 
 
@@ -61,7 +53,7 @@ def watchlist(statuses: list[WatchStatus], history: dict, today: date) -> list[A
         out.append(Alert("warn", "B 类新股",
                          f"{c['name']} 上市进度更新：{STAGES[c['from']]} → {STAGES[c['to']]}。"))
     for s in statuses:
-        if s.stage >= 4 and s.official:
+        if s.official and 4 <= s.stage <= 5:  # filed or about to price; listed ones need no reminder
             out.append(Alert("warn", "B 类新股", f"{s.name}：{s.label}。{s.evidence}"))
     return out
 

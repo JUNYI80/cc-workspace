@@ -33,10 +33,14 @@ START = "2014-01-01"
 MAX_DAILY_MOVE = 0.21
 
 
-def to_yahoo(code: str) -> str:
-    """'600519' -> '600519.SS'，'000001' -> '000001.SZ'。"""
+def to_yahoo(code: str) -> str | None:
+    """'600519' -> '600519.SS'，'000001' -> '000001.SZ'；北交所股票（Yahoo 没有行情）返回 None。"""
     code = str(code).strip().zfill(6)
-    return f"{code}.SS" if code.startswith(("6", "9")) else f"{code}.SZ"
+    if code.startswith(("6", "900")):
+        return f"{code}.SS"
+    if code.startswith(("0", "2", "3")):
+        return f"{code}.SZ"
+    return None
 
 
 def board(code: str) -> str:
@@ -142,9 +146,18 @@ def _known_missing(cache_dir: Path) -> list[str]:
     return path.read_text().split() if path.exists() else []
 
 
+def drop_unfinished_day(prices: pd.DataFrame, now: pd.Timestamp | None = None) -> pd.DataFrame:
+    """A 股 15:00 收盘。当天收盘前（留 30 分钟余量）的那根日线还在变，先不用。"""
+    now = now or pd.Timestamp.now(tz="Asia/Shanghai")
+    today = now.tz_localize(None).normalize()
+    if len(prices) and prices.index[-1] >= today and (now.hour, now.minute) < (15, 30):
+        return prices[prices.index < today]
+    return prices
+
+
 def clean(close: pd.DataFrame, volume: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """去掉还没发布完整的最后一天，修正复权错误造成的价格跳变。"""
-    close = close.dropna(how="all")
+    """去掉还没收盘或还没发布完整的最后一天，修正复权错误造成的价格跳变。"""
+    close = drop_unfinished_day(close.dropna(how="all"))
     close = drop_incomplete_tail(close)
     volume = volume.reindex(close.index)
     close = close.apply(fix_adjustment_jumps)
@@ -187,12 +200,12 @@ def fix_adjustment_jumps(s: pd.Series, limit: float = MAX_DAILY_MOVE) -> pd.Seri
 def load_benchmarks(start: str = START, cache_dir: Path = CACHE_DIR) -> pd.DataFrame:
     path = cache_dir / "benchmarks.csv"
     if path.exists() and time.time() - path.stat().st_mtime < CACHE_MAX_AGE_S:
-        return pd.read_csv(path, index_col=0, parse_dates=True)
+        return drop_unfinished_day(pd.read_csv(path, index_col=0, parse_dates=True))
     close, _ = download(list(BENCHMARKS.values()), start)
     df = close.rename(columns={v: k for k, v in BENCHMARKS.items()}).ffill()
     cache_dir.mkdir(parents=True, exist_ok=True)
     df.to_csv(path)
-    return df
+    return drop_unfinished_day(df)
 
 
 def latest_prices(symbols: list[str]) -> dict[str, float]:

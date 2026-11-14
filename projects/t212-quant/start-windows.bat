@@ -4,25 +4,23 @@ chcp 65001 >nul
 cd /d "%~dp0"
 title 量化助手
 
-set "PY="
-where py >nul 2>nul && set "PY=py -3"
-if not defined PY set "PY=python"
-%PY% -c "import sys; sys.exit(sys.version_info < (3, 10))" >nul 2>nul
-if errorlevel 1 (
-  echo 没有找到 Python 3.10 或更新的版本。
-  echo 请先从 https://www.python.org/downloads/ 下载安装，安装时勾选 "Add python.exe to PATH"，再双击本文件。
-  pause
-  exit /b 1
-)
+rem Already set up (by the installer or an earlier start): no system Python needed.
+if exist ".venv\Scripts\python.exe" goto ready
 
-if not exist ".venv\Scripts\python.exe" (
-  echo 第一次运行：正在准备环境，大约需要 3-5 分钟……
-  %PY% -m venv .venv
-  if errorlevel 1 goto fail
-)
+set "PY="
+py -3 -c "import sys; sys.exit(sys.version_info < (3, 10))" >nul 2>nul
+if not errorlevel 1 set "PY=py -3"
+if not defined PY python -c "import sys; sys.exit(sys.version_info < (3, 10))" >nul 2>nul
+if not defined PY if not errorlevel 1 set "PY=python"
+if not defined PY goto no_python
+echo 第一次运行：正在准备环境，大约需要 3-5 分钟……
+%PY% -m venv .venv
+if errorlevel 1 goto fail
+
+:ready
 echo 正在检查组件……
 ".venv\Scripts\python.exe" -m pip install --disable-pip-version-check -q -e ".[app]"
-if errorlevel 1 echo 安装组件时出错，尝试直接启动……
+if errorlevel 1 echo 组件检查没有完成（可能没有联网），尝试直接启动……
 
 echo.
 echo 正在启动，浏览器会自动打开 http://localhost:8501
@@ -31,6 +29,12 @@ start "" /b cmd /c "ping -n 7 127.0.0.1 >nul & start http://localhost:8501"
 ".venv\Scripts\python.exe" -m streamlit run src\t212quant\app.py
 pause
 exit /b 0
+
+:no_python
+echo 没有找到 Python 3.10 或更新的版本。
+echo 请先从 https://www.python.org/downloads/ 下载安装，安装时勾选 "Add python.exe to PATH"，再双击本文件。
+pause
+exit /b 1
 
 :fail
 echo 准备环境失败，请截图这个窗口发给我。

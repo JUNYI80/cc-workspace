@@ -62,7 +62,30 @@ def test_current_picks_are_sorted_and_eligible(prices):
     assert len(t) <= 8
     assert list(t["score"]) == sorted(t["score"], reverse=True)
     assert (t["momentum"] > 0).all() and (t["vs_sma"] > 0).all()
-    assert picks.next_rebalance > picks.as_of
+    assert picks.next_rebalance > picks.data_date >= picks.as_of
+
+
+def test_decision_dates_are_previous_month_ends():
+    idx = pd.bdate_range("2026-08-03", "2026-11-13")
+    last, before = screener.decision_dates(idx, pd.Timestamp("2026-11-14"))
+    assert (last, before) == (pd.Timestamp("2026-10-30"), pd.Timestamp("2026-09-30"))
+    # On the first day of a month the list switches to the month that just ended.
+    assert screener.decision_dates(idx, pd.Timestamp("2026-11-01"))[0] == pd.Timestamp("2026-10-30")
+    assert screener.decision_dates(idx[:5], pd.Timestamp("2026-08-07")) == (idx[4], None)
+
+
+def test_list_is_fixed_within_a_month_and_reports_changes(prices):
+    p = screener.ScreenParams(top_n=8)
+    day = prices.index[-1]
+    mid = screener.current_picks(prices, universe(), p, today=day)
+    earlier = screener.current_picks(prices.loc[:day - pd.Timedelta(days=5)], universe(), p, today=day)
+    assert list(mid.table["symbol"]) == list(earlier.table["symbol"])  # later days don't change it
+    last, before = screener.decision_dates(prices.index, day)
+    assert mid.as_of == last
+    panel = screener.factor_panel(prices[SYMS], prices[screener.MARKET], p)
+    then = set(panel.score.loc[before][panel.eligible.loc[before]].nlargest(8).index)
+    now = set(mid.table["symbol"])
+    assert set(mid.added) == now - then and set(mid.removed) == then - now
 
 
 def test_next_rebalance_skips_weekend():

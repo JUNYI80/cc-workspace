@@ -39,6 +39,7 @@ def fundamentals(symbols: list[str]) -> pd.DataFrame:
     rng = np.random.default_rng(5)
     return pd.DataFrame({
         "name": [f"{s} 演示公司" for s in symbols],
+        "sector": rng.choice(SECTORS, len(symbols)),
         "forward_pe": rng.uniform(12, 70, len(symbols)).round(1),
         "pe": rng.uniform(15, 90, len(symbols)).round(1),
         "margin": rng.uniform(-0.05, 0.35, len(symbols)),

@@ -51,12 +51,7 @@ def save_settings(settings: dict, path: Path | None = None) -> None:
 
 
 def load_history(path: Path | None = None) -> dict:
-    return _read_json(path or HISTORY_FILE, {"picks": {}, "stages": {}, "stage_changes": []})
-
-
-def record_picks(history: dict, month: str, codes: list[str]) -> None:
-    """Remember the first list of picks seen in each month."""
-    history["picks"].setdefault(month, codes)
+    return _read_json(path or HISTORY_FILE, {"stages": {}, "stage_changes": []})
 
 
 def record_stage(history: dict, name: str, stage: int, today: date | None = None) -> None:

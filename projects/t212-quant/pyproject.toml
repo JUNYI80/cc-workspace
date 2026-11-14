@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "t212quant"
-version = "0.2.0"
+version = "0.3.0"
 description = "Quant stock picks, IPO tracking and ETF rotation for Trading 212"
 requires-python = ">=3.10"
 dependencies = [
@@ -19,8 +19,8 @@ dependencies = [
 
 [project.optional-dependencies]
 plot = ["matplotlib>=3.7"]
-app = ["streamlit>=1.40", "altair>=5", "lxml>=4.9", "matplotlib>=3.7"]
-dev = ["pytest>=7", "streamlit>=1.40", "altair>=5", "lxml>=4.9", "matplotlib>=3.7"]
+app = ["streamlit>=1.52", "altair>=5", "matplotlib>=3.7"]
+dev = ["pytest>=7", "streamlit>=1.52", "altair>=5", "matplotlib>=3.7", "vl-convert-python>=1.6"]
 
 [project.scripts]
 t212q = "t212quant.cli:main"
